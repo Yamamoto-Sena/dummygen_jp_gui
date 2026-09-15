@@ -3,53 +3,42 @@ import { ProgressBar } from "./ProgressBar";
 import type { GenerationProgress, OutputEncoding } from "./types";
 
 interface Props {
-  rowCount: number;
-  onRowCountChange: (value: number) => void;
   format: "csv" | "sql";
   onFormatChange: (value: "csv" | "sql") => void;
-  tableName: string;
-  onTableNameChange: (value: string) => void;
   encoding: OutputEncoding;
   onEncodingChange: (value: OutputEncoding) => void;
+  quoteAll: boolean;
+  onQuoteAllChange: (value: boolean) => void;
   onGenerate: () => void;
   isGenerating: boolean;
   progress: GenerationProgress | null;
+  progressUnit?: string;
   error: string | null;
+  // テーブルが2個以上のとき。複数テーブルの生成(dummy_data_gen側の
+  // write_output_multi_table)は現状quote_all(値を""で囲むオプション)に対応していないため、
+  // このときはチェックボックス自体を隠す
+  isMultiTable?: boolean;
 }
 
-const inputClass =
-  "w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500";
 const labelClass = "text-xs font-medium text-slate-500 dark:text-slate-400";
 
 export function ExportPanel({
-  rowCount,
-  onRowCountChange,
   format,
   onFormatChange,
-  tableName,
-  onTableNameChange,
   encoding,
   onEncodingChange,
+  quoteAll,
+  onQuoteAllChange,
   onGenerate,
   isGenerating,
   progress,
+  progressUnit,
   error,
+  isMultiTable,
 }: Props) {
   return (
     <div className="space-y-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4">
       <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">エクスポート設定</h2>
-
-      <label className="flex flex-col gap-1">
-        <span className={labelClass}>生成件数(10〜1,000,000)</span>
-        <input
-          type="number"
-          min={10}
-          max={1_000_000}
-          className={inputClass}
-          value={rowCount}
-          onChange={(e) => onRowCountChange(Number(e.target.value))}
-        />
-      </label>
 
       <div className="flex flex-col gap-1">
         <span className={labelClass}>出力フォーマット</span>
@@ -65,17 +54,22 @@ export function ExportPanel({
         </div>
       </div>
 
-      {format === "sql" && (
-        <label className="flex flex-col gap-1">
-          <span className={labelClass}>テーブル名</span>
-          <input
-            type="text"
-            className={inputClass}
-            placeholder="users"
-            value={tableName}
-            onChange={(e) => onTableNameChange(e.target.value)}
-          />
-        </label>
+      {format === "csv" && !isMultiTable && (
+        <div className="flex flex-col gap-1">
+          <label className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200 cursor-pointer">
+            <input type="checkbox" checked={quoteAll} onChange={(e) => onQuoteAllChange(e.target.checked)} />
+            値を""(ダブルクォート)で囲む
+          </label>
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            氏名にスペースを含むケースなど、値の区切りを明確にしたい場合にオンにしてください。
+          </p>
+        </div>
+      )}
+
+      {format === "csv" && isMultiTable && (
+        <p className="text-xs text-slate-400 dark:text-slate-500">
+          複数テーブルの生成では、値を""で囲むオプションは今のところ使えません。
+        </p>
       )}
 
       <div className="flex flex-col gap-1">
@@ -106,7 +100,7 @@ export function ExportPanel({
       </button>
 
       {progress && (isGenerating || progress.done === progress.total) && (
-        <ProgressBar done={progress.done} total={progress.total} />
+        <ProgressBar done={progress.done} total={progress.total} unit={progressUnit} />
       )}
 
       {error && (

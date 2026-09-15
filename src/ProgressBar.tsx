@@ -1,9 +1,11 @@
 interface Props {
   done: number;
   total: number;
+  // 進捗の単位。単一テーブルは行数("行")、複数テーブルはテーブル数("テーブル")
+  unit?: string;
 }
 
-export function ProgressBar({ done, total }: Props) {
+export function ProgressBar({ done, total, unit = "行" }: Props) {
   const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
   return (
     <div className="space-y-1">
@@ -14,7 +16,8 @@ export function ProgressBar({ done, total }: Props) {
         />
       </div>
       <p className="text-xs text-slate-500 dark:text-slate-400">
-        {done.toLocaleString()} / {total.toLocaleString()}行 生成完了 ({percent}%)
+        {done.toLocaleString()} / {total.toLocaleString()}
+        {unit} 生成完了 ({percent}%)
       </p>
     </div>
   );

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Plus } from "lucide-react";
 import { ColumnRow } from "./ColumnRow";
 import { newColumn, type ColumnConfig } from "./types";
@@ -5,19 +6,36 @@ import { newColumn, type ColumnConfig } from "./types";
 interface Props {
   columns: ColumnConfig[];
   onChange: (columns: ColumnConfig[]) => void;
+  otherTables?: { name: string; columns: ColumnConfig[] }[];
 }
 
-export function ColumnEditor({ columns, onChange }: Props) {
+export function ColumnEditor({ columns, onChange, otherTables }: Props) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+
   const updateAt = (index: number, column: ColumnConfig) =>
     onChange(columns.map((c, i) => (i === index ? column : c)));
 
   const removeAt = (index: number) => onChange(columns.filter((_, i) => i !== index));
+
+  const duplicateAt = (index: number) => {
+    const next = [...columns];
+    next.splice(index + 1, 0, { ...columns[index] });
+    onChange(next);
+  };
 
   const moveBy = (index: number, delta: number) => {
     const target = index + delta;
     if (target < 0 || target >= columns.length) return;
     const next = [...columns];
     [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  };
+
+  const moveTo = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    const next = [...columns];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
     onChange(next);
   };
 
@@ -31,10 +49,19 @@ export function ColumnEditor({ columns, onChange }: Props) {
           column={column}
           onChange={(c) => updateAt(index, c)}
           onRemove={() => removeAt(index)}
+          onDuplicate={() => duplicateAt(index)}
           onMoveUp={() => moveBy(index, -1)}
           onMoveDown={() => moveBy(index, 1)}
           canMoveUp={index > 0}
           canMoveDown={index < columns.length - 1}
+          isDragging={dragIndex === index}
+          onDragStart={() => setDragIndex(index)}
+          onDragOver={() => {
+            if (dragIndex !== null && dragIndex !== index) moveTo(dragIndex, index);
+            if (dragIndex !== null) setDragIndex(index);
+          }}
+          onDragEnd={() => setDragIndex(null)}
+          otherTables={otherTables}
         />
       ))}
       <button

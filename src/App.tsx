@@ -3,11 +3,22 @@ import { Dices, Moon, Sun } from "lucide-react";
 import { ColumnEditor } from "./ColumnEditor";
 import { ExportPanel } from "./ExportPanel";
 import { PreviewTable } from "./PreviewTable";
+import { SampleCsvImport } from "./SampleCsvImport";
 import { SavedConfigsPanel } from "./SavedConfigsPanel";
+import { SchemaYamlPanel } from "./SchemaYamlPanel";
+import { TableTabs } from "./TableTabs";
 import { TemplatePicker } from "./TemplatePicker";
 import type { Template } from "./templates";
 import { useDummyGen } from "./useDummyGen";
-import { newColumn, type ColumnConfig, type OutputEncoding, type PreviewResult } from "./types";
+import {
+  COLUMN_TYPES,
+  makeTableId,
+  newColumn,
+  type OutputEncoding,
+  type PreviewResult,
+  type SchemaInput,
+  type TableConfig,
+} from "./types";
 import {
   deleteSavedConfig,
   loadLastSession,
@@ -19,70 +30,112 @@ import {
 import "./App.css";
 
 const THEME_KEY = "dummygen_jp_theme";
-const PREVIEW_SAMPLE_SIZE = 5;
+const DEFAULT_PREVIEW_SAMPLE_SIZE = 5;
+const PREVIEW_SIZE_OPTIONS = [5, 10, 20, 50];
 const PREVIEW_DEBOUNCE_MS = 400;
 const SESSION_SAVE_DEBOUNCE_MS = 500;
 
+// 起動時のデフォルトのテーブル(1個だけ)。モジュール読み込み時に一度だけ作ることで、
+// tables/activeTableIdの2つのuseStateが必ず同じidを初期値として参照できるようにしている
+const DEFAULT_TABLE: TableConfig = {
+  id: makeTableId(),
+  name: "users",
+  rowCount: 1000,
+  columns: [newColumn("id", "sequence"), newColumn("name", "name_ja")],
+};
+
 function App() {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
-  const [columns, setColumns] = useState<ColumnConfig[]>([
-    newColumn("id", "sequence"),
-    newColumn("name", "name_ja"),
-  ]);
-  const [rowCount, setRowCount] = useState(1000);
+  const [tables, setTables] = useState<TableConfig[]>([DEFAULT_TABLE]);
+  const [activeTableId, setActiveTableId] = useState<string>(DEFAULT_TABLE.id);
   const [format, setFormat] = useState<"csv" | "sql">("csv");
-  const [tableName, setTableName] = useState("users");
   const [encoding, setEncoding] = useState<OutputEncoding>("utf8");
+  const [quoteAll, setQuoteAll] = useState(false);
   const [successPath, setSuccessPath] = useState<string | null>(null);
-  const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [previewSize, setPreviewSize] = useState(DEFAULT_PREVIEW_SAMPLE_SIZE);
+  const [previewByTable, setPreviewByTable] = useState<Record<string, PreviewResult>>({});
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>([]);
 
-  const { pickSavePath, generate, preview: fetchPreview, progress, isGenerating, error } = useDummyGen();
+  const {
+    pickSavePath,
+    generate,
+    preview: fetchPreview,
+    generateMulti,
+    previewMulti: fetchPreviewMulti,
+    exportSchemaYaml,
+    importSchemaYaml,
+    progress,
+    isGenerating,
+    error,
+  } = useDummyGen();
+
+  const activeTable = tables.find((t) => t.id === activeTableId) ?? tables[0];
+  const otherTables = tables.filter((t) => t.id !== activeTable.id).map((t) => ({ name: t.name, columns: t.columns }));
+  const isMultiTable = tables.length > 1;
 
   // 前回終了時の設定状態を自動的に復元する(仕様書3.3)。保存済み設定の一覧もここで読み込む
   useEffect(() => {
     const last = loadLastSession();
     if (last) {
-      setColumns(last.columns);
-      setRowCount(last.rowCount);
+      setTables(last.tables);
+      setActiveTableId(last.tables[0]?.id ?? DEFAULT_TABLE.id);
       setFormat(last.format);
-      setTableName(last.tableName);
       setEncoding(last.encoding);
+      setQuoteAll(last.quoteAll ?? false);
     }
     setSavedConfigs(loadSavedConfigs());
   }, []);
 
-  // 列設定・エクスポート設定が変わるたびに、少し待ってから「前回の状態」として保存する
+  // テーブル一覧・エクスポート設定が変わるたびに、少し待ってから「前回の状態」として保存する
   // (連続入力のたびに毎回書き込むと重くなるため500ms待つ)
   useEffect(() => {
     const timer = setTimeout(() => {
-      saveLastSession({ columns, rowCount, format, tableName, encoding });
+      saveLastSession({ tables, format, encoding, quoteAll });
     }, SESSION_SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [columns, rowCount, format, tableName, encoding]);
+  }, [tables, format, encoding, quoteAll]);
 
-  // 列設定・生成件数が変わるたびに、少し待ってからサンプルデータを取り直す
+  // テーブル一覧が変わるたびに、少し待ってからサンプルデータを取り直す
   // (連続入力のたびに毎回呼ぶと重くなるため400ms待つ)。
-  // サンプル件数は「5件」と「実際の生成件数」の小さい方にし、生成件数を5未満に
-  // 設定したときにunique制約のエラーがプレビューだけで出てしまう食い違いを避ける。
+  // テーブルが1個だけなら今まで通りの単一テーブル用プレビュー、2個以上なら
+  // 外部キーの参照関係も含めて解決する複数テーブル用プレビューを使う
   useEffect(() => {
-    if (columns.length === 0) {
-      setPreview(null);
+    if (tables.every((t) => t.columns.length === 0)) {
+      setPreviewByTable({});
       setPreviewError(null);
       return;
     }
     const timer = setTimeout(() => {
-      const sampleSize = Math.min(PREVIEW_SAMPLE_SIZE, Math.max(1, rowCount));
-      fetchPreview(columns, sampleSize)
-        .then((result) => {
-          setPreview(result);
-          setPreviewError(null);
-        })
-        .catch((e) => setPreviewError(String(e)));
+      if (tables.length === 1) {
+        const t = tables[0];
+        const sampleSize = Math.min(previewSize, Math.max(1, t.rowCount));
+        fetchPreview(t.columns, sampleSize)
+          .then((result) => {
+            setPreviewByTable({ [t.id]: result });
+            setPreviewError(null);
+          })
+          .catch((e) => setPreviewError(String(e)));
+      } else {
+        const request: SchemaInput[] = tables.map((t) => ({
+          row_count: t.rowCount,
+          table_name: t.name,
+          columns: t.columns,
+        }));
+        fetchPreviewMulti(request, previewSize)
+          .then((results) => {
+            const map: Record<string, PreviewResult> = {};
+            tables.forEach((t, i) => {
+              map[t.id] = results[i];
+            });
+            setPreviewByTable(map);
+            setPreviewError(null);
+          })
+          .catch((e) => setPreviewError(String(e)));
+      }
     }, PREVIEW_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [columns, rowCount, fetchPreview]);
+  }, [tables, previewSize, fetchPreview, fetchPreviewMulti]);
 
   useEffect(() => {
     const saved = localStorage.getItem(THEME_KEY) as "light" | "dark" | null;
@@ -98,49 +151,129 @@ function App() {
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
+  const updateTable = (id: string, updater: (t: TableConfig) => TableConfig) =>
+    setTables((prev) => prev.map((t) => (t.id === id ? updater(t) : t)));
+
+  const setActiveColumns = (columns: typeof activeTable.columns) => updateTable(activeTable.id, (t) => ({ ...t, columns }));
+
+  const handleAddTable = () => {
+    const newTable: TableConfig = { id: makeTableId(), name: `table${tables.length + 1}`, rowCount: 1000, columns: [] };
+    setTables([...tables, newTable]);
+    setActiveTableId(newTable.id);
+  };
+
+  const handleRemoveTable = (id: string) => {
+    if (tables.length <= 1) return;
+    const next = tables.filter((t) => t.id !== id);
+    setTables(next);
+    if (activeTableId === id) setActiveTableId(next[0].id);
+  };
+
+  const handleRenameTable = (id: string, name: string) => updateTable(id, (t) => ({ ...t, name }));
+
   const handleGenerate = async () => {
     setSuccessPath(null);
-    if (columns.length === 0) return;
-    if (format === "sql" && tableName.trim() === "") return;
+    if (tables.every((t) => t.columns.length === 0)) return;
+    if (format === "sql" && tables.length === 1 && activeTable.name.trim() === "") return;
+    if (isMultiTable && tables.some((t) => t.name.trim() === "")) return;
 
     const extension = format;
     const defaultName = format === "csv" ? "output.csv" : "output.sql";
     const outputPath = await pickSavePath(defaultName, extension.toUpperCase(), extension);
     if (!outputPath) return; // ダイアログでキャンセルされた
 
-    const ok = await generate({
-      row_count: rowCount,
-      columns,
-      table_name: format === "sql" ? tableName : undefined,
-      format,
-      encoding,
-      output_path: outputPath,
-    });
+    let ok: boolean;
+    if (!isMultiTable) {
+      const t = tables[0];
+      ok = await generate({
+        row_count: t.rowCount,
+        columns: t.columns,
+        table_name: format === "sql" ? t.name : undefined,
+        format,
+        encoding,
+        output_path: outputPath,
+        quote_all: quoteAll,
+      });
+    } else {
+      const request: SchemaInput[] = tables.map((t) => ({ row_count: t.rowCount, table_name: t.name, columns: t.columns }));
+      ok = await generateMulti(request, format, encoding, outputPath);
+    }
     if (ok) setSuccessPath(outputPath);
   };
 
   const handleSelectTemplate = (template: Template) => {
-    setColumns(template.columns);
-    setTableName(template.tableName);
+    const newTable: TableConfig = {
+      id: makeTableId(),
+      name: template.tableName,
+      rowCount: activeTable.rowCount,
+      columns: template.columns,
+    };
+    setTables([newTable]);
+    setActiveTableId(newTable.id);
     setSuccessPath(null);
   };
 
   const handleSaveConfig = (name: string) => {
-    setSavedConfigs(upsertSavedConfig(name, { columns, rowCount, format, tableName, encoding }));
+    setSavedConfigs(upsertSavedConfig(name, { tables, format, encoding, quoteAll }));
   };
 
   const handleLoadConfig = (config: SavedConfig) => {
-    setColumns(config.state.columns);
-    setRowCount(config.state.rowCount);
+    setTables(config.state.tables);
+    setActiveTableId(config.state.tables[0]?.id ?? DEFAULT_TABLE.id);
     setFormat(config.state.format);
-    setTableName(config.state.tableName);
     setEncoding(config.state.encoding);
+    setQuoteAll(config.state.quoteAll ?? false);
     setSuccessPath(null);
   };
 
   const handleDeleteConfig = (name: string) => {
     setSavedConfigs(deleteSavedConfig(name));
   };
+
+  const handleExportSchema = async () => {
+    try {
+      const request: SchemaInput[] = tables.map((t) => ({ row_count: t.rowCount, table_name: t.name, columns: t.columns }));
+      const path = await exportSchemaYaml(request);
+      if (path) window.alert(`schema.yamlとして保存しました:\n${path}`);
+    } catch (e) {
+      window.alert(`保存に失敗しました: ${String(e)}`);
+    }
+  };
+
+  const handleImportSchema = async () => {
+    try {
+      const result = await importSchemaYaml();
+      if (!result) return; // ダイアログでキャンセルされた
+
+      // このGUIが対応していない列タイプが含まれていたら、中途半端に取り込まず中止する
+      const unknownTypes = new Set<string>();
+      for (const t of result.tables) {
+        for (const c of t.columns) {
+          if (!COLUMN_TYPES.some((ct) => ct.id === c.type)) unknownTypes.add(c.type);
+        }
+      }
+      if (unknownTypes.size > 0) {
+        window.alert(
+          `読み込みを中止しました。このGUIが対応していない列タイプが含まれています: ${[...unknownTypes].join(", ")}`,
+        );
+        return;
+      }
+
+      const newTables: TableConfig[] = result.tables.map((t) => ({
+        id: makeTableId(),
+        name: t.table_name ?? "table1",
+        rowCount: t.row_count,
+        columns: t.columns,
+      }));
+      setTables(newTables);
+      setActiveTableId(newTables[0].id);
+      setSuccessPath(null);
+    } catch (e) {
+      window.alert(`読み込みに失敗しました: ${String(e)}`);
+    }
+  };
+
+  const totalRows = tables.reduce((sum, t) => sum + t.rowCount, 0);
 
   return (
     <main className="min-h-screen">
@@ -159,38 +292,75 @@ function App() {
         </button>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 max-w-6xl mx-auto">
+      <div className="grid grid-cols-1 lg:grid-cols-2 lg:items-start gap-6 p-6 max-w-6xl mx-auto">
         <section className="space-y-3">
-          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">カラム(列)設定</h2>
+          <TableTabs
+            tables={tables}
+            activeTableId={activeTable.id}
+            onSelect={setActiveTableId}
+            onAdd={handleAddTable}
+            onRemove={handleRemoveTable}
+            onRename={handleRenameTable}
+          />
+
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">カラム(列)設定</h2>
+            <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+              <span>このテーブルの生成件数(10〜1,000,000)</span>
+              <input
+                type="number"
+                min={10}
+                max={1_000_000}
+                className="w-28 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                value={activeTable.rowCount}
+                onChange={(e) => updateTable(activeTable.id, (t) => ({ ...t, rowCount: Number(e.target.value) }))}
+              />
+            </label>
+          </div>
+
           <TemplatePicker onSelect={handleSelectTemplate} />
+          <SampleCsvImport
+            columns={activeTable.columns}
+            onImport={(imported) => {
+              setActiveColumns(imported);
+              setSuccessPath(null);
+            }}
+          />
           <SavedConfigsPanel
             configs={savedConfigs}
             onSave={handleSaveConfig}
             onLoad={handleLoadConfig}
             onDelete={handleDeleteConfig}
           />
-          <ColumnEditor columns={columns} onChange={setColumns} />
+          <SchemaYamlPanel onExport={handleExportSchema} onImport={handleImportSchema} />
+          <ColumnEditor columns={activeTable.columns} onChange={setActiveColumns} otherTables={otherTables} />
         </section>
 
-        <section className="space-y-4">
-          <PreviewTable preview={preview} error={previewError} />
+        <section className="space-y-4 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
+          <PreviewTable
+            preview={previewByTable[activeTable.id] ?? null}
+            error={previewError}
+            previewSize={previewSize}
+            onPreviewSizeChange={setPreviewSize}
+            previewSizeOptions={PREVIEW_SIZE_OPTIONS}
+          />
           <ExportPanel
-            rowCount={rowCount}
-            onRowCountChange={setRowCount}
             format={format}
             onFormatChange={setFormat}
-            tableName={tableName}
-            onTableNameChange={setTableName}
             encoding={encoding}
             onEncodingChange={setEncoding}
+            quoteAll={quoteAll}
+            onQuoteAllChange={setQuoteAll}
             onGenerate={handleGenerate}
             isGenerating={isGenerating}
             progress={progress}
+            progressUnit={isMultiTable ? "テーブル" : "行"}
             error={error}
+            isMultiTable={isMultiTable}
           />
           {successPath && (
             <p className="rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
-              {rowCount.toLocaleString()}行のデータを {successPath} に書き出しました
+              {totalRows.toLocaleString()}行のデータを {successPath} に書き出しました
             </p>
           )}
         </section>

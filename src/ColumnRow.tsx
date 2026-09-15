@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Copy, GripVertical, Trash2 } from "lucide-react";
 import { COLUMN_TYPES, newColumn, type ColumnConfig } from "./types";
 import { ColumnTypeFields } from "./ColumnTypeFields";
 
@@ -6,10 +6,16 @@ interface Props {
   column: ColumnConfig;
   onChange: (column: ColumnConfig) => void;
   onRemove: () => void;
+  onDuplicate: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   canMoveUp: boolean;
   canMoveDown: boolean;
+  isDragging: boolean;
+  onDragStart: () => void;
+  onDragOver: () => void;
+  onDragEnd: () => void;
+  otherTables?: { name: string; columns: ColumnConfig[] }[];
 }
 
 const inputClass =
@@ -19,10 +25,39 @@ const iconButtonClass =
 
 const GROUPS = [...new Set(COLUMN_TYPES.map((t) => t.group))];
 
-export function ColumnRow({ column, onChange, onRemove, onMoveUp, onMoveDown, canMoveUp, canMoveDown }: Props) {
+export function ColumnRow({
+  column,
+  onChange,
+  onRemove,
+  onDuplicate,
+  onMoveUp,
+  onMoveDown,
+  canMoveUp,
+  canMoveDown,
+  isDragging,
+  onDragStart,
+  onDragOver,
+  onDragEnd,
+  otherTables,
+}: Props) {
   return (
-    <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-3 space-y-3">
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        onDragOver();
+      }}
+      className={`rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-3 space-y-3 transition ${isDragging ? "opacity-40" : ""}`}
+    >
       <div className="flex items-center gap-2">
+        <span
+          draggable
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          className="shrink-0 cursor-grab active:cursor-grabbing text-slate-400 dark:text-slate-500"
+          title="ドラッグで並べ替え"
+        >
+          <GripVertical className="w-4 h-4" />
+        </span>
         <input
           type="text"
           className={`${inputClass} flex-1`}
@@ -51,12 +86,15 @@ export function ColumnRow({ column, onChange, onRemove, onMoveUp, onMoveDown, ca
         <button type="button" className={iconButtonClass} onClick={onMoveDown} disabled={!canMoveDown} title="下へ">
           <ChevronDown className="w-4 h-4" />
         </button>
+        <button type="button" className={iconButtonClass} onClick={onDuplicate} title="複製">
+          <Copy className="w-4 h-4" />
+        </button>
         <button type="button" className={iconButtonClass} onClick={onRemove} title="削除">
           <Trash2 className="w-4 h-4" />
         </button>
       </div>
 
-      <ColumnTypeFields column={column} onChange={onChange} />
+      <ColumnTypeFields column={column} onChange={onChange} otherTables={otherTables} />
 
       <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400">
         <label className="flex items-center gap-1.5">

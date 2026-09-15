@@ -3,6 +3,8 @@ import { Dices, Moon, Sun } from "lucide-react";
 import { ColumnEditor } from "./ColumnEditor";
 import { ExportPanel } from "./ExportPanel";
 import { PreviewTable } from "./PreviewTable";
+import { TemplatePicker } from "./TemplatePicker";
+import type { Template } from "./templates";
 import { useDummyGen } from "./useDummyGen";
 import { newColumn, type ColumnConfig, type OutputEncoding, type PreviewResult } from "./types";
 import "./App.css";
@@ -84,6 +86,12 @@ function App() {
     if (ok) setSuccessPath(outputPath);
   };
 
+  const handleSelectTemplate = (template: Template) => {
+    setColumns(template.columns);
+    setTableName(template.tableName);
+    setSuccessPath(null);
+  };
+
   return (
     <main className="min-h-screen">
       <header className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 px-6 py-3">
@@ -104,6 +112,7 @@ function App() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 max-w-6xl mx-auto">
         <section className="space-y-3">
           <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">カラム(列)設定</h2>
+          <TemplatePicker onSelect={handleSelectTemplate} />
           <ColumnEditor columns={columns} onChange={setColumns} />
         </section>
 

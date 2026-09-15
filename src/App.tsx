@@ -3,15 +3,25 @@ import { Dices, Moon, Sun } from "lucide-react";
 import { ColumnEditor } from "./ColumnEditor";
 import { ExportPanel } from "./ExportPanel";
 import { PreviewTable } from "./PreviewTable";
+import { SavedConfigsPanel } from "./SavedConfigsPanel";
 import { TemplatePicker } from "./TemplatePicker";
 import type { Template } from "./templates";
 import { useDummyGen } from "./useDummyGen";
 import { newColumn, type ColumnConfig, type OutputEncoding, type PreviewResult } from "./types";
+import {
+  deleteSavedConfig,
+  loadLastSession,
+  loadSavedConfigs,
+  saveLastSession,
+  upsertSavedConfig,
+  type SavedConfig,
+} from "./savedConfigs";
 import "./App.css";
 
 const THEME_KEY = "dummygen_jp_theme";
 const PREVIEW_SAMPLE_SIZE = 5;
 const PREVIEW_DEBOUNCE_MS = 400;
+const SESSION_SAVE_DEBOUNCE_MS = 500;
 
 function App() {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
@@ -26,8 +36,31 @@ function App() {
   const [successPath, setSuccessPath] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>([]);
 
   const { pickSavePath, generate, preview: fetchPreview, progress, isGenerating, error } = useDummyGen();
+
+  // 前回終了時の設定状態を自動的に復元する(仕様書3.3)。保存済み設定の一覧もここで読み込む
+  useEffect(() => {
+    const last = loadLastSession();
+    if (last) {
+      setColumns(last.columns);
+      setRowCount(last.rowCount);
+      setFormat(last.format);
+      setTableName(last.tableName);
+      setEncoding(last.encoding);
+    }
+    setSavedConfigs(loadSavedConfigs());
+  }, []);
+
+  // 列設定・エクスポート設定が変わるたびに、少し待ってから「前回の状態」として保存する
+  // (連続入力のたびに毎回書き込むと重くなるため500ms待つ)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      saveLastSession({ columns, rowCount, format, tableName, encoding });
+    }, SESSION_SAVE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [columns, rowCount, format, tableName, encoding]);
 
   // 列設定・生成件数が変わるたびに、少し待ってからサンプルデータを取り直す
   // (連続入力のたびに毎回呼ぶと重くなるため400ms待つ)。
@@ -92,6 +125,23 @@ function App() {
     setSuccessPath(null);
   };
 
+  const handleSaveConfig = (name: string) => {
+    setSavedConfigs(upsertSavedConfig(name, { columns, rowCount, format, tableName, encoding }));
+  };
+
+  const handleLoadConfig = (config: SavedConfig) => {
+    setColumns(config.state.columns);
+    setRowCount(config.state.rowCount);
+    setFormat(config.state.format);
+    setTableName(config.state.tableName);
+    setEncoding(config.state.encoding);
+    setSuccessPath(null);
+  };
+
+  const handleDeleteConfig = (name: string) => {
+    setSavedConfigs(deleteSavedConfig(name));
+  };
+
   return (
     <main className="min-h-screen">
       <header className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 px-6 py-3">
@@ -113,6 +163,12 @@ function App() {
         <section className="space-y-3">
           <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">カラム(列)設定</h2>
           <TemplatePicker onSelect={handleSelectTemplate} />
+          <SavedConfigsPanel
+            configs={savedConfigs}
+            onSave={handleSaveConfig}
+            onLoad={handleLoadConfig}
+            onDelete={handleDeleteConfig}
+          />
           <ColumnEditor columns={columns} onChange={setColumns} />
         </section>
 

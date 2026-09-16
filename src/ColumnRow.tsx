@@ -120,14 +120,18 @@ export function ColumnRow({
             onChange={(e) => onChange({ ...column, null_rate: Number(e.target.value) })}
           />
         </label>
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={column.unique ?? false}
-            onChange={(e) => onChange({ ...column, unique: e.target.checked })}
-          />
-          <span>重複しない値にする</span>
-        </label>
+        {column.type === "sequence" ? (
+          <span className="text-slate-400 dark:text-slate-500">連番のため常に重複しません</span>
+        ) : (
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={column.unique ?? false}
+              onChange={(e) => onChange({ ...column, unique: e.target.checked })}
+            />
+            <span>重複しない値にする</span>
+          </label>
+        )}
       </div>
     </div>
   );

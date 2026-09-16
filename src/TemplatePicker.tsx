@@ -1,3 +1,4 @@
+import { LayoutTemplate } from "lucide-react";
 import { TEMPLATES, type Template } from "./templates";
 
 interface Props {
@@ -7,8 +8,12 @@ interface Props {
 // ワンクリックでカラム構成を一式セットするボタン。押すと今の列設定を置き換える
 export function TemplatePicker({ onSelect }: Props) {
   return (
-    <div className="flex flex-wrap gap-2">
-      <span className="text-xs text-slate-500 dark:text-slate-400 self-center">テンプレートから選ぶ:</span>
+    <div className="space-y-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-3">
+      <h2 className="flex items-center gap-1.5 text-xs font-semibold text-cyan-600 dark:text-cyan-400">
+        <LayoutTemplate className="w-3.5 h-3.5" />
+        テンプレートから選ぶ
+      </h2>
+      <div className="flex flex-wrap gap-2">
       {TEMPLATES.map((t) => (
         <button
           key={t.id}
@@ -19,6 +24,7 @@ export function TemplatePicker({ onSelect }: Props) {
           {t.label}
         </button>
       ))}
+      </div>
     </div>
   );
 }

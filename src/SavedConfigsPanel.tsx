@@ -36,7 +36,10 @@ export function SavedConfigsPanel({ configs, onSave, onLoad, onDelete }: Props) 
 
   return (
     <div className="space-y-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-3">
-      <h2 className="text-xs font-semibold text-slate-600 dark:text-slate-300">設定の保存・読み込み</h2>
+      <h2 className="flex items-center gap-1.5 text-xs font-semibold text-violet-600 dark:text-violet-400">
+        <Save className="w-3.5 h-3.5" />
+        設定の保存・読み込み
+      </h2>
       <div className="flex gap-2">
         <input
           type="text"

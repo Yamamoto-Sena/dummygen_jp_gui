@@ -410,7 +410,15 @@ function App() {
                 max={MAX_ROW_COUNT}
                 className="w-28 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
                 value={activeTable.rowCount}
-                onChange={(e) => updateTable(activeTable.id, (t) => ({ ...t, rowCount: Number(e.target.value) }))}
+                onChange={(e) => {
+                  const raw = Number(e.target.value);
+                  // 入力中は下限(10)を強制しない(0にいったん減らしてから打ち直せるように)。
+                  // 上限(1,000,000)だけは入力の時点で止め、桁数を無限に打てないようにする
+                  updateTable(activeTable.id, (t) => ({
+                    ...t,
+                    rowCount: Number.isNaN(raw) ? 0 : Math.min(MAX_ROW_COUNT, raw),
+                  }));
+                }}
                 onBlur={(e) => updateTable(activeTable.id, (t) => ({ ...t, rowCount: clampRowCount(Number(e.target.value)) }))}
               />
             </label>

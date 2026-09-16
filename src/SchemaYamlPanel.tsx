@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { FileDown, FileUp } from "lucide-react";
+import { FileDown, FileJson, FileUp } from "lucide-react";
 import { isTauriRuntime } from "./runtimeEnv";
 
 interface Props {
@@ -21,32 +21,38 @@ export function SchemaYamlPanel({ onExport, onImport, onImportFile }: Props) {
   const isTauri = isTauriRuntime();
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <button type="button" onClick={onExport} className={buttonClass}>
-        <FileDown className="w-3.5 h-3.5" />
-        YAMLとして保存
-      </button>
-      <button
-        type="button"
-        onClick={() => (isTauri ? onImport() : fileInputRef.current?.click())}
-        className={buttonClass}
-      >
-        <FileUp className="w-3.5 h-3.5" />
-        YAMLを読み込む
-      </button>
-      {!isTauri && (
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".yaml,.yml"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) onImportFile(file);
-            e.target.value = "";
-          }}
-        />
-      )}
+    <div className="space-y-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-3">
+      <h2 className="flex items-center gap-1.5 text-xs font-semibold text-fuchsia-600 dark:text-fuchsia-400">
+        <FileJson className="w-3.5 h-3.5" />
+        スキーマ(YAML)の保存・読み込み
+      </h2>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={onExport} className={buttonClass}>
+          <FileDown className="w-3.5 h-3.5" />
+          YAMLとして保存
+        </button>
+        <button
+          type="button"
+          onClick={() => (isTauri ? onImport() : fileInputRef.current?.click())}
+          className={buttonClass}
+        >
+          <FileUp className="w-3.5 h-3.5" />
+          YAMLを読み込む
+        </button>
+        {!isTauri && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".yaml,.yml"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onImportFile(file);
+              e.target.value = "";
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }

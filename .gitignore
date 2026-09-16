@@ -19,6 +19,10 @@ dist-ssr
 # Rust(src-server、ブラウザ版用HTTPサーバー)のビルド生成物
 /src-server/target
 
+# 動作確認のために生成されたExcel出力ファイル(実行のたびに作られるので追跡しない)
+/output.xlsx
+/~$output.xlsx
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

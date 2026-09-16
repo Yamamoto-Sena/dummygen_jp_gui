@@ -339,6 +339,157 @@ async fn import_schema_yaml(body: String) -> Result<Json<ImportedSchemaFile>, Ap
     .map(Json)
 }
 
+// `cargo test`で実行されるテスト。preview/generate/generate_multi等のHTTPハンドラは
+// axumのextractor(Json<T>など)を引数に取るが、実際の処理は全てrun_*関数(同期・axum非依存)
+// に切り出してあるため、サーバーを起動せずに直接テストできる(src-tauri/src/lib.rsの
+// run_generate_multiと同じ設計方針)。export_schema_yaml/import_schema_yamlはハンドラ自体が
+// 薄いので、Json(...)で包んで直接awaitする
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sequence_and_name_columns() -> Vec<ColumnDef> {
+        serde_json::from_value(serde_json::json!([
+            { "name": "id", "type": "sequence" },
+            { "name": "name", "type": "name_ja" }
+        ]))
+        .unwrap()
+    }
+
+    fn users_schema() -> Schema {
+        serde_json::from_value(serde_json::json!({
+            "row_count": 5,
+            "table_name": "users",
+            "columns": [
+                { "name": "id", "type": "sequence" },
+                { "name": "name", "type": "name_ja" }
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn orders_schema() -> Schema {
+        serde_json::from_value(serde_json::json!({
+            "row_count": 8,
+            "table_name": "orders",
+            "columns": [
+                { "name": "id", "type": "sequence" },
+                { "name": "user_id", "type": "foreign_key", "references": "users.id" }
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("dummygen_jp_server_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
+
+    #[test]
+    fn run_preview_generates_requested_sample_size() {
+        let request = PreviewRequest { columns: sequence_and_name_columns(), sample_size: 5 };
+        let result = run_preview(request).expect("プレビュー生成に失敗した");
+        assert_eq!(result.headers, vec!["id".to_string(), "name".to_string()]);
+        assert_eq!(result.rows.len(), 5);
+    }
+
+    #[test]
+    fn run_preview_rejects_min_greater_than_max() {
+        let columns: Vec<ColumnDef> =
+            serde_json::from_value(serde_json::json!([{ "name": "n", "type": "integer", "min": 10, "max": 1 }]))
+                .unwrap();
+        let request = PreviewRequest { columns, sample_size: 3 };
+        // PreviewResultはDebugを持たないため、expect_errではなくerr().unwrap()を使う
+        let err = run_preview(request).err().unwrap();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn run_preview_multi_resolves_foreign_keys_between_tables() {
+        let request = PreviewRequestMulti { tables: vec![users_schema(), orders_schema()], sample_size: Some(4) };
+        let results = run_preview_multi(request).expect("複数テーブルのプレビューに失敗した");
+        assert_eq!(results.len(), 2);
+        // sample_sizeで各テーブルの行数が絞られていること
+        assert_eq!(results[0].rows.len(), 4);
+        assert_eq!(results[1].rows.len(), 4);
+    }
+
+    #[test]
+    fn run_generate_writes_csv_with_requested_row_count() {
+        let request = GenerateRequestWeb {
+            row_count: 10,
+            columns: sequence_and_name_columns(),
+            table_name: None,
+            format: "csv".to_string(),
+            encoding: "utf8".to_string(),
+            seed: Some(1),
+            quote_all: false,
+            file_name: None,
+        };
+        let path = temp_path("generate_test.csv");
+        run_generate(request, path.to_str().unwrap()).expect("CSV生成に失敗した");
+        let csv = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(csv.lines().count(), 11); // ヘッダー行 + 10行
+    }
+
+    #[test]
+    fn run_generate_rejects_sql_without_table_name() {
+        let request = GenerateRequestWeb {
+            row_count: 3,
+            columns: sequence_and_name_columns(),
+            table_name: None,
+            format: "sql".to_string(),
+            encoding: "utf8".to_string(),
+            seed: None,
+            quote_all: false,
+            file_name: None,
+        };
+        let path = temp_path("generate_test_no_table_name.sql");
+        let err = run_generate(request, path.to_str().unwrap()).expect_err("table_name無しのSQLはエラーになるはず");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn run_generate_multi_writes_one_file_per_table_with_valid_foreign_keys() {
+        let request = GenerateRequestMultiWeb {
+            tables: vec![users_schema(), orders_schema()],
+            format: "csv".to_string(),
+            encoding: "utf8".to_string(),
+            seed: Some(42),
+        };
+        let base_path = temp_path("generate_multi_test.csv");
+        let written =
+            run_generate_multi(request, base_path.to_str().unwrap()).expect("複数テーブルの生成に失敗した");
+        assert_eq!(written.len(), 2);
+
+        let users_csv = std::fs::read_to_string(&written[0].0).unwrap();
+        let orders_csv = std::fs::read_to_string(&written[1].0).unwrap();
+        let user_ids: std::collections::HashSet<String> =
+            users_csv.lines().skip(1).map(|line| line.split(',').next().unwrap().to_string()).collect();
+        assert_eq!(user_ids.len(), 5);
+
+        // 子テーブル(orders)のuser_idは必ず親テーブル(users)に実在するidのどれかを指す
+        for line in orders_csv.lines().skip(1) {
+            let user_id = line.split(',').nth(1).unwrap();
+            assert!(user_ids.contains(user_id), "orders行のuser_id({user_id})がusersに存在しない");
+        }
+    }
+
+    #[tokio::test]
+    async fn export_then_import_schema_yaml_round_trips() {
+        let yaml = export_schema_yaml(Json(ExportSchemaRequest { tables: vec![users_schema()] }))
+            .await
+            .expect("YAMLへの書き出しに失敗した");
+
+        let imported = import_schema_yaml(yaml).await.expect("書き出したYAMLの読み込みに失敗した").0;
+        assert!(!imported.multi_table);
+        assert_eq!(imported.tables.len(), 1);
+        assert_eq!(imported.tables[0].table_name.as_deref(), Some("users"));
+        assert_eq!(imported.tables[0].columns.len(), 2);
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let dist_dir = std::env::var("DUMMYGEN_DIST_DIR")

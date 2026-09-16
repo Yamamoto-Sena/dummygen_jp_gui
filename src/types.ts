@@ -50,6 +50,43 @@ export const COLUMN_TYPES: ColumnTypeMeta[] = [
   { id: "foreign_key", label: "外部キー(他テーブル参照)", group: "識別子" },
 ];
 
+// カラム設定欄がグレー一色で見分けづらいという声を受けて、グループ(氏名/連絡先・住所/…)ごとに
+// 色分けするための対応表。ColumnRow.tsxで、カードの左端の帯とグループ名バッジの色として使う
+export const GROUP_COLORS: Record<ColumnTypeMeta["group"], { border: string; badge: string }> = {
+  識別子: {
+    border: "border-l-indigo-400 dark:border-l-indigo-600",
+    badge: "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300",
+  },
+  氏名: {
+    border: "border-l-rose-400 dark:border-l-rose-600",
+    badge: "bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300",
+  },
+  "連絡先・住所": {
+    border: "border-l-amber-400 dark:border-l-amber-600",
+    badge: "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300",
+  },
+  日時: {
+    border: "border-l-violet-400 dark:border-l-violet-600",
+    badge: "bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300",
+  },
+  "論理値・定数": {
+    border: "border-l-teal-400 dark:border-l-teal-600",
+    badge: "bg-teal-100 text-teal-700 dark:bg-teal-950/60 dark:text-teal-300",
+  },
+  ビジネス: {
+    border: "border-l-blue-400 dark:border-l-blue-600",
+    badge: "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300",
+  },
+  "Web/IT": {
+    border: "border-l-emerald-400 dark:border-l-emerald-600",
+    badge: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
+  },
+  金融: {
+    border: "border-l-red-400 dark:border-l-red-600",
+    badge: "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300",
+  },
+};
+
 // ColumnDef(name/null_rate/unique) + ColumnType(flatten)をまとめてフラットに表現したもの。
 // Rust側は`#[serde(tag = "type")]`の内部タグ付きenumなので、typeとその他のフィールドを
 // 同じ階層に並べて送るとそのままデシリアライズできる。使わない型のフィールドが

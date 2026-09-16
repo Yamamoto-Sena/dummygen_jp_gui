@@ -8,6 +8,7 @@ import { SavedConfigsPanel } from "./SavedConfigsPanel";
 import { SchemaYamlPanel } from "./SchemaYamlPanel";
 import { TableTabs } from "./TableTabs";
 import { TemplatePicker } from "./TemplatePicker";
+import { ToolsMenu } from "./ToolsMenu";
 import type { Template } from "./templates";
 import { useDummyGen } from "./useDummyGen";
 import { isTauriRuntime } from "./runtimeEnv";
@@ -36,6 +37,13 @@ const DEFAULT_PREVIEW_SAMPLE_SIZE = 5;
 const PREVIEW_SIZE_OPTIONS = [5, 10, 20, 50];
 const PREVIEW_DEBOUNCE_MS = 400;
 const SESSION_SAVE_DEBOUNCE_MS = 500;
+const MIN_ROW_COUNT = 10;
+const MAX_ROW_COUNT = 1_000_000;
+
+function clampRowCount(value: number): number {
+  if (Number.isNaN(value)) return MIN_ROW_COUNT;
+  return Math.min(MAX_ROW_COUNT, Math.max(MIN_ROW_COUNT, value));
+}
 
 // 起動時のデフォルトのテーブル(1個だけ)。モジュール読み込み時に一度だけ作ることで、
 // tables/activeTableIdの2つのuseStateが必ず同じidを初期値として参照できるようにしている
@@ -58,6 +66,7 @@ function App() {
   const [previewByTable, setPreviewByTable] = useState<Record<string, PreviewResult>>({});
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>([]);
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
 
   const {
     pickSavePath,
@@ -221,6 +230,7 @@ function App() {
     setTables([newTable]);
     setActiveTableId(newTable.id);
     setSuccessPath(null);
+    setToolsMenuOpen(false);
   };
 
   const handleSaveConfig = (name: string) => {
@@ -234,6 +244,7 @@ function App() {
     setEncoding(config.state.encoding);
     setQuoteAll(config.state.quoteAll ?? false);
     setSuccessPath(null);
+    setToolsMenuOpen(false);
   };
 
   const handleDeleteConfig = (name: string) => {
@@ -277,6 +288,7 @@ function App() {
     setTables(newTables);
     setActiveTableId(newTables[0].id);
     setSuccessPath(null);
+    setToolsMenuOpen(false);
   };
 
   // Tauri版: ネイティブダイアログでschema.yamlを選ぶ
@@ -336,34 +348,38 @@ function App() {
               <span>このテーブルの生成件数(10〜1,000,000)</span>
               <input
                 type="number"
-                min={10}
-                max={1_000_000}
+                min={MIN_ROW_COUNT}
+                max={MAX_ROW_COUNT}
                 className="w-28 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500"
                 value={activeTable.rowCount}
                 onChange={(e) => updateTable(activeTable.id, (t) => ({ ...t, rowCount: Number(e.target.value) }))}
+                onBlur={(e) => updateTable(activeTable.id, (t) => ({ ...t, rowCount: clampRowCount(Number(e.target.value)) }))}
               />
             </label>
           </div>
 
-          <TemplatePicker onSelect={handleSelectTemplate} />
-          <SampleCsvImport
-            columns={activeTable.columns}
-            onImport={(imported) => {
-              setActiveColumns(imported);
-              setSuccessPath(null);
-            }}
-          />
-          <SavedConfigsPanel
-            configs={savedConfigs}
-            onSave={handleSaveConfig}
-            onLoad={handleLoadConfig}
-            onDelete={handleDeleteConfig}
-          />
-          <SchemaYamlPanel
-            onExport={handleExportSchema}
-            onImport={handleImportSchema}
-            onImportFile={handleImportSchemaFile}
-          />
+          <ToolsMenu isOpen={toolsMenuOpen} onOpenChange={setToolsMenuOpen}>
+            <TemplatePicker onSelect={handleSelectTemplate} />
+            <SampleCsvImport
+              columns={activeTable.columns}
+              onImport={(imported) => {
+                setActiveColumns(imported);
+                setSuccessPath(null);
+                setToolsMenuOpen(false);
+              }}
+            />
+            <SavedConfigsPanel
+              configs={savedConfigs}
+              onSave={handleSaveConfig}
+              onLoad={handleLoadConfig}
+              onDelete={handleDeleteConfig}
+            />
+            <SchemaYamlPanel
+              onExport={handleExportSchema}
+              onImport={handleImportSchema}
+              onImportFile={handleImportSchemaFile}
+            />
+          </ToolsMenu>
           <ColumnEditor columns={activeTable.columns} onChange={setActiveColumns} otherTables={otherTables} />
         </section>
 

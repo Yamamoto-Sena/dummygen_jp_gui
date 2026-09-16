@@ -1,0 +1,22 @@
+tables:
+  - name: users
+    row_count: 20
+    columns:
+      - name: id
+        type: sequence
+      - name: name
+        type: name_ja
+      - name: email
+        type: email
+  - name: orders
+    row_count: 50
+    columns:
+      - name: id
+        type: sequence
+      - name: user_id
+        type: foreign_key
+        references: users.id
+      - name: status
+        type: enum
+        choices: [受付中, 発送済み, キャンセル]
+        weights: [7, 2, 1]

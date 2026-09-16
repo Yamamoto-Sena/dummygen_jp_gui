@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Copy, GripVertical, Trash2 } from "lucide-react";
-import { COLUMN_TYPES, newColumn, type ColumnConfig } from "./types";
+import { COLUMN_TYPES, GROUP_COLORS, newColumn, type ColumnConfig } from "./types";
 import { ColumnTypeFields } from "./ColumnTypeFields";
 
 interface Props {
@@ -40,13 +40,16 @@ export function ColumnRow({
   onDragEnd,
   otherTables,
 }: Props) {
+  const group = COLUMN_TYPES.find((t) => t.id === column.type)?.group;
+  const colors = group ? GROUP_COLORS[group] : undefined;
+
   return (
     <div
       onDragOver={(e) => {
         e.preventDefault();
         onDragOver();
       }}
-      className={`rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-3 space-y-3 transition ${isDragging ? "opacity-40" : ""}`}
+      className={`rounded-lg border border-slate-200 dark:border-slate-800 ${colors ? `border-l-4 ${colors.border}` : ""} bg-white dark:bg-slate-900/60 p-3 space-y-3 transition ${isDragging ? "opacity-40" : ""}`}
     >
       <div className="flex items-center gap-2">
         <span
@@ -58,6 +61,14 @@ export function ColumnRow({
         >
           <GripVertical className="w-4 h-4" />
         </span>
+        {group && colors && (
+          <span
+            className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ${colors.badge}`}
+            title={`カテゴリ: ${group}`}
+          >
+            {group}
+          </span>
+        )}
         <input
           type="text"
           className={`${inputClass} flex-1`}

@@ -69,6 +69,7 @@ struct GenerateRequestMultiWeb {
     format: String,
     encoding: String,
     seed: Option<u64>,
+    quote_all: bool,
 }
 
 #[derive(Deserialize)]
@@ -294,7 +295,7 @@ fn run_generate_multi(request: GenerateRequestMultiWeb, output_base_path: &str) 
         other => return Err(bad_request(format!("複数テーブルでは未対応の出力形式です: {other}"))),
     };
 
-    write_output_multi_table(format, &generated, output_base_path, encoding).map_err(internal_error)
+    write_output_multi_table(format, &generated, output_base_path, encoding, request.quote_all).map_err(internal_error)
 }
 
 // 複数テーブルの生成結果は、ファイルが1個だけ(SQL、またはCSVでテーブルが1個)ならそのまま、
@@ -506,6 +507,7 @@ mod tests {
             format: "csv".to_string(),
             encoding: "utf8".to_string(),
             seed: Some(42),
+            quote_all: false,
         };
         let base_path = temp_path("generate_multi_test.csv");
         let written =
@@ -523,6 +525,25 @@ mod tests {
             let user_id = line.split(',').nth(1).unwrap();
             assert!(user_ids.contains(user_id), "orders行のuser_id({user_id})がusersに存在しない");
         }
+    }
+
+    // 複数テーブルのCSV出力でもquote_all: trueが効くことを確認する
+    #[test]
+    fn run_generate_multi_csv_with_quote_all_true_quotes_every_field() {
+        let request = GenerateRequestMultiWeb {
+            tables: vec![users_schema()],
+            format: "csv".to_string(),
+            encoding: "utf8".to_string(),
+            seed: Some(42),
+            quote_all: true,
+        };
+        let base_path = temp_path("generate_multi_quote_all_test.csv");
+        let written =
+            run_generate_multi(request, base_path.to_str().unwrap()).expect("複数テーブルの生成に失敗した");
+        assert_eq!(written.len(), 1);
+
+        let users_csv = std::fs::read_to_string(&written[0].0).unwrap();
+        assert!(users_csv.lines().next().unwrap().starts_with('"'), "ヘッダー行がダブルクォートで囲まれていない");
     }
 
     #[tokio::test]

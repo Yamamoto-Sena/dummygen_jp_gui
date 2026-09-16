@@ -209,7 +209,7 @@ function App() {
       });
     } else {
       const request: SchemaInput[] = tables.map((t) => ({ row_count: t.rowCount, table_name: t.name, columns: t.columns }));
-      ok = await generateMulti(request, format, encoding, outputPath);
+      ok = await generateMulti(request, format, encoding, outputPath, quoteAll);
     }
     if (ok) {
       // ブラウザ版の複数テーブルは、実際にダウンロードされるファイル名がoutputPathと異なる
@@ -410,7 +410,6 @@ function App() {
             progress={progress}
             progressUnit={isMultiTable ? "テーブル" : "行"}
             error={error}
-            isMultiTable={isMultiTable}
             totalRows={totalRows}
           />
           {successPath && (

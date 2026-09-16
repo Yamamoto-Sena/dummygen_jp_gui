@@ -56,6 +56,9 @@ struct GenerateRequestMulti {
     encoding: String,
     seed: Option<u64>,
     output_path: String,
+    // trueのとき、CSV出力の全ての値をダブルクォートで囲む(単一テーブルのGenerateRequestと同じ意味。
+    // format以外の形式には影響しない)
+    quote_all: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -273,6 +276,7 @@ fn run_generate_multi(
     encoding: &str,
     seed: Option<u64>,
     output_path: &str,
+    quote_all: bool,
     mut on_table_start: impl FnMut(usize, &dummy_data_gen::PreparedTable),
 ) -> Result<(), String> {
     let schema_file = SchemaFile { tables, multi_table: true };
@@ -306,7 +310,7 @@ fn run_generate_multi(
         other => return Err(format!("複数テーブルでは未対応の出力形式です: {other}")),
     };
 
-    write_output_multi_table(format, &generated, output_path, encoding).map_err(|e| e.to_string())?;
+    write_output_multi_table(format, &generated, output_path, encoding, quote_all).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -314,8 +318,7 @@ fn run_generate_multi(
 /// 生成し、write_output_multi_table(dummy_data_gen側、非ストリーミング)で書き出す。
 /// 単一テーブル(generate_dummy_data)と違い、全テーブル分の行を一度メモリに載せてから
 /// 書き出す方式(ユーザー確認済み: 複数テーブルはまずこの方式で実装する)。
-/// また、write_output_multi_tableはquote_allに対応していないため、複数テーブルのCSV出力では
-/// このオプションは効かない(GUI側で2テーブル以上のときはチェックボックス自体を隠す)。
+/// quote_allはCSV形式のときだけ効く(sql/xlsxには影響しない。dummy_data_gen側のwrite_output_multi_tableと同じ)。
 #[tauri::command]
 fn generate_dummy_data_multi(app: tauri::AppHandle, request: GenerateRequestMulti) -> Result<(), String> {
     let total_tables = request.tables.len() as u64;
@@ -328,6 +331,7 @@ fn generate_dummy_data_multi(app: tauri::AppHandle, request: GenerateRequestMult
         &request.encoding,
         request.seed,
         &request.output_path,
+        request.quote_all,
         move |_idx, _table| {
             let _ =
                 app_for_progress.emit("generation:progress", GenerationProgress { done: done_count, total: total_tables });
@@ -382,7 +386,8 @@ mod tests {
             ],
             "format": "csv",
             "encoding": "utf8",
-            "output_path": "dummy.csv"
+            "output_path": "dummy.csv",
+            "quote_all": false
         }))
         .unwrap();
 
@@ -405,6 +410,7 @@ mod tests {
             "utf8",
             Some(42),
             base_path.to_str().unwrap(),
+            false,
             |_idx, table| started_tables.push(table.name.clone().unwrap_or_default()),
         )
         .expect("複数テーブルの生成に失敗した");
@@ -436,11 +442,44 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let base_path = dir.join("multi_test_out.xlsx");
 
-        run_generate_multi(vec![users_schema(), orders_schema()], "xlsx", "utf8", Some(42), base_path.to_str().unwrap(), |_, _| {})
-            .expect("xlsx形式での複数テーブル生成に失敗した");
+        run_generate_multi(
+            vec![users_schema(), orders_schema()],
+            "xlsx",
+            "utf8",
+            Some(42),
+            base_path.to_str().unwrap(),
+            false,
+            |_, _| {},
+        )
+        .expect("xlsx形式での複数テーブル生成に失敗した");
 
         let bytes = std::fs::read(&base_path).unwrap();
         assert!(!bytes.is_empty(), "xlsxファイルが空だった");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 複数テーブルのCSV出力でもquote_all: trueが効いて、全ての値がダブルクォートで
+    // 囲まれることを確認する(以前はGUIのこの経路にquote_all自体が無かった)
+    #[test]
+    fn run_generate_multi_csv_with_quote_all_true_quotes_every_field() {
+        let dir = std::env::temp_dir().join(format!("dummygen_jp_gui_quote_all_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base_path = dir.join("multi_test_out.csv");
+
+        run_generate_multi(
+            vec![users_schema()],
+            "csv",
+            "utf8",
+            Some(42),
+            base_path.to_str().unwrap(),
+            true,
+            |_, _| {},
+        )
+        .expect("複数テーブルの生成に失敗した");
+
+        let users_csv = std::fs::read_to_string(dir.join("multi_test_out_users.csv")).unwrap();
+        assert!(users_csv.lines().next().unwrap().starts_with('"'), "ヘッダー行がダブルクォートで囲まれていない");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

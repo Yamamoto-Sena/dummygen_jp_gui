@@ -14,10 +14,6 @@ interface Props {
   progress: GenerationProgress | null;
   progressUnit?: string;
   error: string | null;
-  // テーブルが2個以上のとき。複数テーブルの生成(dummy_data_gen側の
-  // write_output_multi_table)は現状quote_all(値を""で囲むオプション)に対応していないため、
-  // このときはチェックボックス自体を隠す
-  isMultiTable?: boolean;
   // Excel(.xlsx)の注意書きの出し分けに使う、全テーブル合計の生成件数
   totalRows: number;
 }
@@ -42,7 +38,6 @@ export function ExportPanel({
   progress,
   progressUnit,
   error,
-  isMultiTable,
   totalRows,
 }: Props) {
   return (
@@ -67,7 +62,7 @@ export function ExportPanel({
         </div>
       </div>
 
-      {format === "csv" && !isMultiTable && (
+      {format === "csv" && (
         <div className="flex flex-col gap-1">
           <label className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200 cursor-pointer">
             <input type="checkbox" checked={quoteAll} onChange={(e) => onQuoteAllChange(e.target.checked)} />
@@ -77,12 +72,6 @@ export function ExportPanel({
             氏名にスペースを含むケースなど、値の区切りを明確にしたい場合にオンにしてください。
           </p>
         </div>
-      )}
-
-      {format === "csv" && isMultiTable && (
-        <p className="text-xs text-slate-400 dark:text-slate-500">
-          複数テーブルの生成では、値を""で囲むオプションは今のところ使えません。
-        </p>
       )}
 
       {format === "xlsx" ? (

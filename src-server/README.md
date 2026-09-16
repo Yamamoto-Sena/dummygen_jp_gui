@@ -125,6 +125,7 @@ curl -X POST http://localhost:3000/api/generate \
 | `format` | `"csv"` \| `"sql"` \| `"xlsx"` | ○ | 出力形式 |
 | `encoding` | `"utf8"` \| `"sjis"` | ○ | 文字コード(xlsxのときは無視される) |
 | `seed` | number | - | 乱数シード |
+| `quote_all` | boolean | ○ | CSVの全ての値を`""`で囲むか(CSV以外では無視される) |
 
 レスポンス(`200 OK`): ファイルが1個だけ(SQL、またはExcel、またはCSVでテーブルが1個)ならそのファイル、CSVで複数テーブル(ファイルが2個以上)ならそれらをまとめた`output.zip`(`Content-Type: application/zip`)。
 

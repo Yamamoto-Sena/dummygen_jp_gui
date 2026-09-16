@@ -123,17 +123,23 @@ export function useDummyGen() {
   // (Rust側generate_dummy_data_multiのGenerationProgress参照。ブラウザでは進捗イベントを
   // 購読できないため、進捗バーは出さずスピナー表示のみになる)
   const generateMulti = useCallback(
-    async (tables: SchemaInput[], format: OutputFormat, encoding: OutputEncoding, outputPath: string) => {
+    async (
+      tables: SchemaInput[],
+      format: OutputFormat,
+      encoding: OutputEncoding,
+      outputPath: string,
+      quoteAll: boolean,
+    ) => {
       setError(null);
       setIsGenerating(true);
       setProgress({ done: 0, total: tables.length });
       try {
         if (isTauriRuntime()) {
           await invoke("generate_dummy_data_multi", {
-            request: { tables, format, encoding, output_path: outputPath },
+            request: { tables, format, encoding, output_path: outputPath, quote_all: quoteAll },
           });
         } else {
-          const res = await apiPost("/api/generate_multi", { tables, format, encoding });
+          const res = await apiPost("/api/generate_multi", { tables, format, encoding, quote_all: quoteAll });
           const blob = await res.blob();
           const fallbackName = format === "sql" ? "output.sql" : format === "xlsx" ? "output.xlsx" : "output.zip";
           downloadBlob(blob, fileNameFromResponse(res, fallbackName));

@@ -16,8 +16,8 @@ use axum::{
 use dummy_data_gen::{
     generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables,
     resolve_fk_reprs, resolve_foreign_keys, resolve_unique_pools, schema_file_to_yaml, topological_order,
-    write_csv_streaming, write_output_multi_table, write_sql_streaming, ColumnDef, Encoding, Format,
-    GeneratedTable, Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
+    write_csv_streaming, write_output_multi_table, write_sql_streaming, write_xlsx_from_rows, ColumnDef,
+    Encoding, Format, GeneratedTable, Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
 };
 use serde::{Deserialize, Serialize};
 use tower_http::services::ServeDir;
@@ -161,13 +161,23 @@ async fn preview_multi(
 }
 
 fn default_file_name(format: &str) -> String {
-    if format == "sql" { "output.sql".to_string() } else { "output.csv".to_string() }
+    match format {
+        "sql" => "output.sql".to_string(),
+        "xlsx" => "output.xlsx".to_string(),
+        _ => "output.csv".to_string(),
+    }
 }
 
 // 生成結果のバイト列を、ブラウザがダウンロードとして扱うレスポンスに変換する
 // (Content-Dispositionヘッダーがこれの目印。普通のWebサイトのダウンロードボタンと同じ仕組み)
 fn file_response(bytes: Vec<u8>, file_name: &str) -> Response {
-    let content_type = if file_name.ends_with(".zip") { "application/zip" } else { "application/octet-stream" };
+    let content_type = if file_name.ends_with(".zip") {
+        "application/zip"
+    } else if file_name.ends_with(".xlsx") {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    } else {
+        "application/octet-stream"
+    };
     (
         [
             (header::CONTENT_TYPE, content_type.to_string()),
@@ -214,6 +224,12 @@ fn run_generate(request: GenerateRequestWeb, output_path: &str) -> Result<(), Ap
                 DEFAULT_CHUNK_SIZE,
                 |_, _| {},
             )
+        }
+        // xlsxはストリーミング書き込みが無いため(dummy_data_gen側の仕様)、
+        // generate_all_rowsで全行をメモリに載せてから一括で書き出す
+        "xlsx" => {
+            let rows = generate_all_rows(schema.row_count, &columns, base_seed);
+            write_xlsx_from_rows(&columns, &rows, output_path)
         }
         other => return Err(bad_request(format!("未対応の出力形式です: {other}"))),
     };
@@ -264,6 +280,7 @@ fn run_generate_multi(request: GenerateRequestMultiWeb, output_base_path: &str) 
     let format = match request.format.as_str() {
         "csv" => Format::Csv,
         "sql" => Format::Sql,
+        "xlsx" => Format::Xlsx,
         other => return Err(bad_request(format!("複数テーブルでは未対応の出力形式です: {other}"))),
     };
 
@@ -281,7 +298,11 @@ async fn generate_multi(Json(request): Json<GenerateRequestMultiWeb>) -> Result<
         // 区切り」とみなす実装のため、拡張子を付けずに渡すと、一時フォルダのパスに含まれる
         // 別の"."と誤認されて壊れたパスになることがある(実際にWindowsの一時フォルダで発生した)。
         // 必ず拡張子付きのベース名を渡すことでこれを避ける
-        let base_name = if format == "sql" { "output.sql" } else { "output.csv" };
+        let base_name = match format.as_str() {
+            "sql" => "output.sql",
+            "xlsx" => "output.xlsx",
+            _ => "output.csv",
+        };
         let base_path = tmp_dir.path().join(base_name);
         let written = run_generate_multi(request, &base_path.to_string_lossy())?;
 
@@ -431,6 +452,24 @@ mod tests {
         run_generate(request, path.to_str().unwrap()).expect("CSV生成に失敗した");
         let csv = std::fs::read_to_string(&path).unwrap();
         assert_eq!(csv.lines().count(), 11); // ヘッダー行 + 10行
+    }
+
+    #[test]
+    fn run_generate_writes_xlsx_workbook() {
+        let request = GenerateRequestWeb {
+            row_count: 10,
+            columns: sequence_and_name_columns(),
+            table_name: None,
+            format: "xlsx".to_string(),
+            encoding: "utf8".to_string(),
+            seed: Some(1),
+            quote_all: false,
+            file_name: None,
+        };
+        let path = temp_path("generate_test.xlsx");
+        run_generate(request, path.to_str().unwrap()).expect("xlsx生成に失敗した");
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(!bytes.is_empty(), "xlsxファイルが空だった");
     }
 
     #[test]

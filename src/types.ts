@@ -23,6 +23,8 @@ export const COLUMN_TYPES: ColumnTypeMeta[] = [
   { id: "katakana_last_name", label: "フリガナ(姓)", group: "氏名" },
   { id: "katakana_first_name", label: "フリガナ(名)", group: "氏名" },
   { id: "romaji_name", label: "ローマ字氏名", group: "氏名" },
+  { id: "gender", label: "性別", group: "氏名" },
+  { id: "blood_type", label: "血液型", group: "氏名" },
   { id: "email", label: "メールアドレス", group: "連絡先・住所" },
   { id: "phone_ja", label: "携帯電話番号", group: "連絡先・住所" },
   { id: "phone_ja_landline", label: "固定電話番号", group: "連絡先・住所" },
@@ -182,6 +184,8 @@ export function newColumn(name: string, type: string): ColumnConfig {
 }
 
 export type OutputEncoding = "utf8" | "sjis";
+// xlsxは文字コード(OutputEncoding)の概念が無く(dummy_data_gen側の仕様)、常にUTF-8相当で書き出される
+export type OutputFormat = "csv" | "sql" | "xlsx";
 
 export interface PreviewResult {
   headers: string[];
@@ -192,7 +196,7 @@ export interface GenerateRequest {
   row_count: number;
   columns: ColumnConfig[];
   table_name?: string;
-  format: "csv" | "sql";
+  format: OutputFormat;
   encoding: OutputEncoding;
   seed?: number;
   output_path: string;

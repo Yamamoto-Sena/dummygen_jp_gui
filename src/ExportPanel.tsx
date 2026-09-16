@@ -1,10 +1,10 @@
 import { Loader2, Save } from "lucide-react";
 import { ProgressBar } from "./ProgressBar";
-import type { GenerationProgress, OutputEncoding } from "./types";
+import type { GenerationProgress, OutputEncoding, OutputFormat } from "./types";
 
 interface Props {
-  format: "csv" | "sql";
-  onFormatChange: (value: "csv" | "sql") => void;
+  format: OutputFormat;
+  onFormatChange: (value: OutputFormat) => void;
   encoding: OutputEncoding;
   onEncodingChange: (value: OutputEncoding) => void;
   quoteAll: boolean;
@@ -51,6 +51,10 @@ export function ExportPanel({
             <input type="radio" checked={format === "sql"} onChange={() => onFormatChange("sql")} />
             SQL (INSERT)
           </label>
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input type="radio" checked={format === "xlsx"} onChange={() => onFormatChange("xlsx")} />
+            Excel (.xlsx)
+          </label>
         </div>
       </div>
 
@@ -72,22 +76,28 @@ export function ExportPanel({
         </p>
       )}
 
-      <div className="flex flex-col gap-1">
-        <span className={labelClass}>文字コード</span>
-        <div className="flex gap-4 text-sm text-slate-700 dark:text-slate-200">
-          <label className="flex items-center gap-1.5 cursor-pointer">
-            <input type="radio" checked={encoding === "utf8"} onChange={() => onEncodingChange("utf8")} />
-            UTF-8
-          </label>
-          <label className="flex items-center gap-1.5 cursor-pointer">
-            <input type="radio" checked={encoding === "sjis"} onChange={() => onEncodingChange("sjis")} />
-            Shift-JIS
-          </label>
-        </div>
+      {format === "xlsx" ? (
         <p className="text-xs text-slate-400 dark:text-slate-500">
-          Excel等で開いたときに文字化けする場合はShift-JISを選んでください。
+          Excel(.xlsx)はファイル自体に文字コードの概念が無いため、文字コードの指定は不要です。
         </p>
-      </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          <span className={labelClass}>文字コード</span>
+          <div className="flex gap-4 text-sm text-slate-700 dark:text-slate-200">
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input type="radio" checked={encoding === "utf8"} onChange={() => onEncodingChange("utf8")} />
+              UTF-8
+            </label>
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input type="radio" checked={encoding === "sjis"} onChange={() => onEncodingChange("sjis")} />
+              Shift-JIS
+            </label>
+          </div>
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            Excel等で開いたときに文字化けする場合はShift-JISを選んでください。
+          </p>
+        </div>
+      )}
 
       <button
         type="button"

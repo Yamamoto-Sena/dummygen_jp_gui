@@ -50,7 +50,7 @@ cargo run --release   # サーバーを起動する(既定でポート3000)
 
 - `src/TableTabs.tsx`: テーブルの一覧をタブのように表示し、テーブルの追加・削除・名前変更を行う(複数テーブル/外部キー対応)。画面は常に「テーブルの一覧」として扱い、今まで通りの1テーブルだけの使い方は「テーブルが1個だけの状態」として同じ画面構成になる
 - `src/ColumnEditor.tsx` / `ColumnRow.tsx` / `ColumnTypeFields.tsx`: (選択中のテーブルの)カラム(列)の追加・削除・複製・並び替え・ドラッグでの並べ替え(`GripVertical`ハンドル、ネイティブHTML5 Drag and Drop API)と、型ごとの追加設定フォーム(`name_ja`の姓名間スペース有無、`foreign_key`の参照先テーブル/列選択など)。`enum`は選択肢ごとにテキスト入力+出現比率(重み)の数値入力の行として編集する(比率はその場で%表示)。列が多いと見分けづらいため、列タイプの分類(識別子/氏名/連絡先・住所/日時/論理値・定数/ビジネス/Web・IT/金融)ごとに左端の色帯とバッジで色分けしている(`types.ts`の`GROUP_COLORS`)
-- `src/ExportPanel.tsx`: 出力フォーマット(CSV/SQL)・文字コード(UTF-8/Shift-JIS)・CSVの値をダブルクォートで囲むオプション(複数テーブルのときは非対応のため非表示)・生成ボタン。生成件数・テーブル名はテーブルごとの設定になったため、ここではなく各テーブルの画面(`TableTabs`のタブ名・カラム設定欄の生成件数欄)で設定する
+- `src/ExportPanel.tsx`: 出力フォーマット(CSV/SQL/Excel)・文字コード(UTF-8/Shift-JIS。Excel選択時は文字コードの概念が無いため非表示)・CSVの値をダブルクォートで囲むオプション(複数テーブルまたはExcel選択時は非対応のため非表示)・生成ボタン。生成件数・テーブル名はテーブルごとの設定になったため、ここではなく各テーブルの画面(`TableTabs`のタブ名・カラム設定欄の生成件数欄)で設定する
 - `src/PreviewTable.tsx`: 選択中のテーブルについて、列設定に応じた先頭数件のサンプルをその場で表示するリアルタイムプレビュー(表示件数を5/10/20/50件から選べる)
 - `src/SampleCsvImport.tsx`: 手元のサンプルCSVを読み込み、1行目を列名・各列の値を選択肢(`choices`)の候補として選択中のテーブルのカラム設定に反映する。UTF-8として読めない場合は自動的にShift-JISとして読み直す(`readCsvText`)
 - `src/SchemaYamlPanel.tsx`: テーブル一覧を、`dummy_data_gen`(CLI)と互換の`schema.yaml`として書き出し/読み込みする。テーブルが1個なら単一テーブル形式、2個以上なら`tables:`形式になる。読み込んだ列タイプがこのGUIの`COLUMN_TYPES`に無い場合は読み込みを中止しエラー表示する。読み込みボタンはTauriではネイティブダイアログ、ブラウザでは`<input type="file">`(`SampleCsvImport.tsx`と同じ形)に切り替わる
@@ -65,7 +65,7 @@ cargo run --release   # サーバーを起動する(既定でポート3000)
 ## Rust側(src-tauri)
 
 - `pick_save_path`: ネイティブの保存先ダイアログを開く(`tauri-plugin-dialog`)
-- `generate_dummy_data`/`preview_dummy_data`: 単一テーブル用。`dummy_data_gen::write_csv_streaming`/`write_sql_streaming`でストリーミング生成・保存するため、今まで通り大量行(最大100万行)でもメモリを圧迫しない。進捗は`generation:progress`イベントでフロントエンドに通知する
+- `generate_dummy_data`/`preview_dummy_data`: 単一テーブル用。CSV/SQLは`dummy_data_gen::write_csv_streaming`/`write_sql_streaming`でストリーミング生成・保存するため、今まで通り大量行(最大100万行)でもメモリを圧迫しない。Excel(xlsx)はストリーミング書き込みが無い(dummy_data_gen側の仕様)ため`generate_all_rows`で全行をメモリに載せてから`write_xlsx_from_rows`で一括保存する。進捗は`generation:progress`イベントでフロントエンドに通知する(xlsxは逐次通知できないため完了時に1回だけ)
 - `generate_dummy_data_multi`/`preview_dummy_data_multi`: 複数テーブル(外部キー)用。`dummy_data_gen`側の`prepare_tables`/`resolve_foreign_keys`/`topological_order`/`resolve_fk_reprs`/`generate_multi_table_rows`/`write_output_multi_table`を使う。単一テーブルと違い、全テーブル分の行を一度メモリに載せてから書き出す方式(現状の仕様)。`quote_all`(値を""で囲むオプション)には対応していない
 - `export_schema_yaml`/`import_schema_yaml`: テーブル一覧を、`dummy_data_gen::schema_file_to_yaml`/`load_schema`を使って`schema.yaml`として保存/読み込みするネイティブダイアログ
 - 出力する文字コードがUTF-8のときは、Excel(日本語版)がBOM無しUTF-8のCSVをShift-JISと誤認して文字化けするのを防ぐため、ファイル先頭にUTF-8のBOMを付けている(単一テーブルのCSV出力のみ。複数テーブルのCSV/JSON出力は`dummy_data_gen`側の`write_output_multi_table`をそのまま使うためBOMは付かない)
@@ -76,7 +76,7 @@ cargo run --release   # サーバーを起動する(既定でポート3000)
 `src-tauri`とは別の独立したCargoプロジェクト(`dummy_data_gen`を同じように`path`依存で参照)。`dummy_data_gen`自体は一切変更していない(既存の公開関数をそのまま呼ぶだけで済んだため)。
 
 - `/api/preview`・`/api/preview_multi`: `src-tauri`の`preview_dummy_data`・`preview_dummy_data_multi`と同じ処理をHTTPハンドラにしたもの
-- `/api/generate`・`/api/generate_multi`: 生成結果をサーバー側の一時フォルダに書き出し、その中身をそのままレスポンス(ダウンロード)として返す。複数テーブルでファイルが2個以上できる場合(CSV)は`zip`クレートでまとめる。生成処理は重いため`tokio::task::spawn_blocking`で実行し、他のリクエストを受け付けられなくなるのを防いでいる
+- `/api/generate`・`/api/generate_multi`: 生成結果をサーバー側の一時フォルダに書き出し、その中身をそのままレスポンス(ダウンロード)として返す。複数テーブルでファイルが2個以上できる場合(CSV)は`zip`クレートでまとめる(Excelは複数テーブルでも1冊のブック=1ファイルにまとまるためzip化しない)。生成処理は重いため`tokio::task::spawn_blocking`で実行し、他のリクエストを受け付けられなくなるのを防いでいる
 - `/api/export_schema_yaml`・`/api/import_schema_yaml`: `schema_file_to_yaml`・`load_schema`を使う点は`src-tauri`と同じ。`import_schema_yaml`はネイティブダイアログが無いため、ブラウザから送られてきたYAMLのテキストをそのまま受け取り、一時ファイルに書き出してから`load_schema`(パス指定必須)に渡している
 - 静的ファイル配信(`tower_http::services::ServeDir`)で`dummygen_jp_gui/dist`(`pnpm build`の出力)を配信し、`/api/...`以外の全てのパスをそこにフォールバックする
 

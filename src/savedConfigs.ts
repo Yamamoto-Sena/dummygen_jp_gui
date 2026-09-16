@@ -1,10 +1,10 @@
-import { makeTableId, type ColumnConfig, type OutputEncoding, type TableConfig } from "./types";
+import { makeTableId, type ColumnConfig, type OutputEncoding, type OutputFormat, type TableConfig } from "./types";
 
 // 画面の設定一式(テーブル一覧＋エクスポート設定)をまとめた型。
 // 保存・復元の対象はこれだけ(進捗やプレビュー結果のような一時的な状態は含めない)
 export interface AppState {
   tables: TableConfig[];
-  format: "csv" | "sql";
+  format: OutputFormat;
   encoding: OutputEncoding;
   quoteAll: boolean;
 }
@@ -14,7 +14,7 @@ export interface AppState {
 interface LegacyAppState {
   columns: ColumnConfig[];
   rowCount: number;
-  format: "csv" | "sql";
+  format: OutputFormat;
   tableName: string;
   encoding: OutputEncoding;
   quoteAll?: boolean;

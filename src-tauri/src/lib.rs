@@ -1,8 +1,8 @@
 use dummy_data_gen::{
     generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables, resolve_fk_reprs,
     resolve_foreign_keys, resolve_unique_pools, schema_file_to_yaml, topological_order, write_csv_streaming,
-    write_output_multi_table, write_sql_streaming, ColumnDef, Encoding, Format, GeneratedTable, Schema, SchemaFile,
-    DEFAULT_CHUNK_SIZE,
+    write_output_multi_table, write_sql_streaming, write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable,
+    Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -209,8 +209,9 @@ fn generate_dummy_data(app: tauri::AppHandle, request: GenerateRequest) -> Resul
         _ => Encoding::Utf8,
     };
 
+    let app_for_progress = app.clone();
     let on_progress = move |done: u64, total: u64| {
-        let _ = app.emit("generation:progress", GenerationProgress { done, total });
+        let _ = app_for_progress.emit("generation:progress", GenerationProgress { done, total });
     };
 
     let result = match request.format.as_str() {
@@ -241,6 +242,20 @@ fn generate_dummy_data(app: tauri::AppHandle, request: GenerateRequest) -> Resul
                 DEFAULT_CHUNK_SIZE,
                 on_progress,
             )
+        }
+        // xlsxはバイナリ(ZIP)形式のためストリーミング書き込みが無く、CSV/SQLと違い
+        // generate_all_rowsで全行をメモリに載せてから一括で書き出す(--encodingは効かない、
+        // dummy_data_gen側の仕様と同じ)。進捗イベントは逐次発火できないため、完了時に1回だけ送る
+        "xlsx" => {
+            let rows = generate_all_rows(schema.row_count, &columns, base_seed);
+            let result = write_xlsx_from_rows(&columns, &rows, &request.output_path);
+            if result.is_ok() {
+                let _ = app.emit(
+                    "generation:progress",
+                    GenerationProgress { done: schema.row_count as u64, total: schema.row_count as u64 },
+                );
+            }
+            result
         }
         other => return Err(format!("未対応の出力形式です: {other}")),
     };
@@ -287,6 +302,7 @@ fn run_generate_multi(
     let format = match format {
         "csv" => Format::Csv,
         "sql" => Format::Sql,
+        "xlsx" => Format::Xlsx,
         other => return Err(format!("複数テーブルでは未対応の出力形式です: {other}")),
     };
 
@@ -410,6 +426,21 @@ mod tests {
         for uid in &order_user_ids {
             assert!(user_ids.contains(uid), "orders.user_id={} がusersのidに存在しない", uid);
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_generate_multi_writes_xlsx_workbook() {
+        let dir = std::env::temp_dir().join(format!("dummygen_jp_gui_xlsx_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base_path = dir.join("multi_test_out.xlsx");
+
+        run_generate_multi(vec![users_schema(), orders_schema()], "xlsx", "utf8", Some(42), base_path.to_str().unwrap(), |_, _| {})
+            .expect("xlsx形式での複数テーブル生成に失敗した");
+
+        let bytes = std::fs::read(&base_path).unwrap();
+        assert!(!bytes.is_empty(), "xlsxファイルが空だった");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

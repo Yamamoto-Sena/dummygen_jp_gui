@@ -7,6 +7,7 @@ import type {
   GenerateRequest,
   GenerationProgress,
   OutputEncoding,
+  OutputFormat,
   PreviewResult,
   SchemaFileResult,
   SchemaInput,
@@ -108,7 +109,7 @@ export function useDummyGen() {
   // (Rust側generate_dummy_data_multiのGenerationProgress参照。ブラウザでは進捗イベントを
   // 購読できないため、進捗バーは出さずスピナー表示のみになる)
   const generateMulti = useCallback(
-    async (tables: SchemaInput[], format: "csv" | "sql", encoding: OutputEncoding, outputPath: string) => {
+    async (tables: SchemaInput[], format: OutputFormat, encoding: OutputEncoding, outputPath: string) => {
       setError(null);
       setIsGenerating(true);
       setProgress({ done: 0, total: tables.length });
@@ -120,7 +121,8 @@ export function useDummyGen() {
         } else {
           const res = await apiPost("/api/generate_multi", { tables, format, encoding });
           const blob = await res.blob();
-          downloadBlob(blob, fileNameFromResponse(res, format === "sql" ? "output.sql" : "output.zip"));
+          const fallbackName = format === "sql" ? "output.sql" : format === "xlsx" ? "output.xlsx" : "output.zip";
+          downloadBlob(blob, fileNameFromResponse(res, fallbackName));
         }
         return true;
       } catch (e) {

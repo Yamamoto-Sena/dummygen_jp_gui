@@ -17,6 +17,7 @@ import {
   makeTableId,
   newColumn,
   type OutputEncoding,
+  type OutputFormat,
   type PreviewResult,
   type SchemaFileResult,
   type SchemaInput,
@@ -58,7 +59,7 @@ function App() {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [tables, setTables] = useState<TableConfig[]>([DEFAULT_TABLE]);
   const [activeTableId, setActiveTableId] = useState<string>(DEFAULT_TABLE.id);
-  const [format, setFormat] = useState<"csv" | "sql">("csv");
+  const [format, setFormat] = useState<OutputFormat>("csv");
   const [encoding, setEncoding] = useState<OutputEncoding>("utf8");
   const [quoteAll, setQuoteAll] = useState(false);
   const [successPath, setSuccessPath] = useState<string | null>(null);
@@ -190,7 +191,7 @@ function App() {
     if (isMultiTable && tables.some((t) => t.name.trim() === "")) return;
 
     const extension = format;
-    const defaultName = format === "csv" ? "output.csv" : "output.sql";
+    const defaultName = format === "sql" ? "output.sql" : format === "xlsx" ? "output.xlsx" : "output.csv";
     const outputPath = await pickSavePath(defaultName, extension.toUpperCase(), extension);
     if (!outputPath) return; // ダイアログでキャンセルされた
 
@@ -215,7 +216,13 @@ function App() {
       // (SQLは1ファイルだがCSVは2個以上のファイルをzipにまとめる。src-server/src/main.rsの
       // generate_multiと同じ判定)。Tauri版・単一テーブルはoutputPathがそのまま実際の名前
       const downloadedName =
-        isMultiTable && !isTauriRuntime() ? (format === "sql" ? "output.sql" : "output.zip") : outputPath;
+        isMultiTable && !isTauriRuntime()
+          ? format === "sql"
+            ? "output.sql"
+            : format === "xlsx"
+              ? "output.xlsx"
+              : "output.zip"
+          : outputPath;
       setSuccessPath(downloadedName);
     }
   };

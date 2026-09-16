@@ -221,6 +221,25 @@ export function ColumnTypeFields({ column, onChange, otherTables }: Props) {
         </label>
       );
 
+    case "pattern":
+      return (
+        <label className="flex flex-col gap-1">
+          <span className={labelClass}>パターン</span>
+          <input
+            type="text"
+            className={`${inputClass} font-mono`}
+            value={column.pattern ?? ""}
+            onChange={(e) => set("pattern", e.target.value)}
+            placeholder="例: [A-Z]{3}-[0-9]{4}"
+          />
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            正規表現に似た記法。文字クラス<code>[A-Z]</code>・繰り返し
+            <code>{"{n}"}</code>/<code>{"{n,m}"}</code>/<code>?</code>/<code>*</code>/<code>+</code>
+            ・エスケープ<code>{"\\"}</code>に対応(グループ化<code>()</code>や選択<code>|</code>は非対応)。
+          </p>
+        </label>
+      );
+
     case "foreign_key": {
       const tables = otherTables ?? [];
       const [refTable, refColumn] = (column.references ?? "").split(".");

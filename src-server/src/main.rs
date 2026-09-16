@@ -84,17 +84,27 @@ struct ImportedSchemaFile {
     multi_table: bool,
 }
 
-// このサーバーのAPIハンドラが返すエラーの型。(HTTPステータス, メッセージ文字列)の
-// タプルはaxumが標準でIntoResponseを実装しているため、そのまま関数の戻り値の
-// エラー側として使える
-type ApiError = (StatusCode, String);
+// このサーバーのAPIハンドラが返すエラーの型。外部の自動テスト等からも扱いやすいよう、
+// レスポンスは常に`{"error": "メッセージ"}`というJSONにする(README.mdの「エラー形式」参照)。
+// Debugはテストの`.expect`/`.expect_err`が要求するため付けている
+#[derive(Debug)]
+struct ApiError {
+    status: StatusCode,
+    message: String,
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, Json(serde_json::json!({ "error": self.message }))).into_response()
+    }
+}
 
 fn bad_request(msg: impl std::fmt::Display) -> ApiError {
-    (StatusCode::BAD_REQUEST, msg.to_string())
+    ApiError { status: StatusCode::BAD_REQUEST, message: msg.to_string() }
 }
 
 fn internal_error(msg: impl std::fmt::Display) -> ApiError {
-    (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string())
+    ApiError { status: StatusCode::INTERNAL_SERVER_ERROR, message: msg.to_string() }
 }
 
 async fn health() -> &'static str {
@@ -423,7 +433,7 @@ mod tests {
         let request = PreviewRequest { columns, sample_size: 3 };
         // PreviewResultはDebugを持たないため、expect_errではなくerr().unwrap()を使う
         let err = run_preview(request).err().unwrap();
-        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 
     #[test]
@@ -486,7 +496,7 @@ mod tests {
         };
         let path = temp_path("generate_test_no_table_name.sql");
         let err = run_generate(request, path.to_str().unwrap()).expect_err("table_name無しのSQLはエラーになるはず");
-        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 
     #[test]

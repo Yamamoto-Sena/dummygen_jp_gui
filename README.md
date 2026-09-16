@@ -79,6 +79,7 @@ cargo run --release   # サーバーを起動する(既定でポート3000)
 - `/api/generate`・`/api/generate_multi`: 生成結果をサーバー側の一時フォルダに書き出し、その中身をそのままレスポンス(ダウンロード)として返す。複数テーブルでファイルが2個以上できる場合(CSV)は`zip`クレートでまとめる(Excelは複数テーブルでも1冊のブック=1ファイルにまとまるためzip化しない)。生成処理は重いため`tokio::task::spawn_blocking`で実行し、他のリクエストを受け付けられなくなるのを防いでいる
 - `/api/export_schema_yaml`・`/api/import_schema_yaml`: `schema_file_to_yaml`・`load_schema`を使う点は`src-tauri`と同じ。`import_schema_yaml`はネイティブダイアログが無いため、ブラウザから送られてきたYAMLのテキストをそのまま受け取り、一時ファイルに書き出してから`load_schema`(パス指定必須)に渡している
 - 静的ファイル配信(`tower_http::services::ServeDir`)で`dummygen_jp_gui/dist`(`pnpm build`の出力)を配信し、`/api/...`以外の全てのパスをそこにフォールバックする
+- `/api/...`各エンドポイントのリクエスト/レスポンス形式・エラー形式は[src-server/README.md](src-server/README.md)に正式なAPIとして文書化してある(社内の他チームがCI等から直接叩く場合はこちらを参照)
 
 ## Tauriの設定で注意した点
 

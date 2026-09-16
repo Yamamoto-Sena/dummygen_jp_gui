@@ -38,12 +38,16 @@ export const COLUMN_TYPES: ColumnTypeMeta[] = [
   { id: "boolean", label: "Boolean", group: "論理値・定数" },
   { id: "enum", label: "カスタム選択肢", group: "論理値・定数" },
   { id: "fixed", label: "固定値テキスト", group: "論理値・定数" },
+  { id: "pattern", label: "カスタムパターン", group: "論理値・定数" },
   { id: "float", label: "ランダム小数", group: "識別子" },
   { id: "department_ja", label: "部署名", group: "ビジネス" },
   { id: "job_title_ja", label: "役職名", group: "ビジネス" },
   { id: "ip_address", label: "IPアドレス", group: "Web/IT" },
   { id: "jwt", label: "JWT", group: "Web/IT" },
   { id: "api_key", label: "APIキー", group: "Web/IT" },
+  { id: "username", label: "ユーザー名", group: "Web/IT" },
+  { id: "password", label: "パスワード", group: "Web/IT" },
+  { id: "profile_image_url", label: "プロフィール画像URL", group: "Web/IT" },
   { id: "credit_card_number", label: "クレジットカード番号", group: "金融" },
   { id: "credit_card_expiry", label: "クレジットカード有効期限", group: "金融" },
   { id: "bank_account_number", label: "銀行口座番号", group: "金融" },
@@ -123,6 +127,8 @@ export interface ColumnConfig {
   with_space?: boolean;
   // foreign_key。"テーブル名.列名"の形式(例: "users.id")
   references?: string;
+  // pattern。正規表現に似た簡易パターン(例: "[A-Z]{3}-[0-9]{4}")
+  pattern?: string;
 }
 
 // GUI画面上の「テーブル1個分」の単位。複数テーブル対応(外部キー)のために、
@@ -174,6 +180,8 @@ export function newColumn(name: string, type: string): ColumnConfig {
       return { ...base, choices: ["選択肢1", "選択肢2"] };
     case "fixed":
       return { ...base, value: "" };
+    case "pattern":
+      return { ...base, pattern: "[A-Z]{3}-[0-9]{4}" };
     case "email":
       return { ...base, domain: "example.com" };
     case "foreign_key":

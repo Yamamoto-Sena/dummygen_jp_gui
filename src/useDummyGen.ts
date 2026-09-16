@@ -13,6 +13,20 @@ import type {
   SchemaInput,
 } from "./types";
 
+// src-server(ブラウザ版のHTTPサーバー)はエラー時に`{"error": "メッセージ"}`という
+// JSONを返す(README.md「エラー形式」参照)。JSONとして読めない場合はテキストのまま使う
+// (万一サーバー以外の何か、例えばプロキシのエラーページ等が返ってきた場合の保険)
+async function readApiError(res: Response): Promise<string> {
+  const text = await res.text();
+  try {
+    const body: unknown = JSON.parse(text);
+    if (body && typeof body === "object" && "error" in body) return String((body as { error: unknown }).error);
+  } catch {
+    // JSONではなかった。textをそのまま使う
+  }
+  return text;
+}
+
 // ブラウザ版(src-serverのHTTPサーバー)のAPIを呼び、失敗時はTauri版と同じように
 // エラーメッセージの文字列でreject(エラーを投げる)する
 async function apiPost(path: string, body: unknown): Promise<Response> {
@@ -21,7 +35,7 @@ async function apiPost(path: string, body: unknown): Promise<Response> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await readApiError(res));
   return res;
 }
 
@@ -172,7 +186,7 @@ export function useDummyGen() {
       headers: { "Content-Type": "text/plain" },
       body: text,
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await readApiError(res));
     return res.json() as Promise<SchemaFileResult>;
   }, []);
 

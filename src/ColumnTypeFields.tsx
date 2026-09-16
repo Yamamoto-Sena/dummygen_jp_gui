@@ -166,13 +166,24 @@ export function ColumnTypeFields({ column, onChange, otherTables }: Props) {
         next[i] = value;
         set("weights", next);
       };
+      // choicesとweightsは必ずセットで変わるため、set()を2回連続で呼ぶと
+      // 1回目の更新(例: choices)がまだ親に伝わっていない状態で2回目(weights)が
+      // 古いcolumnを元に上書きしてしまい、1回目の変更が消えてしまう。
+      // (このコンポーネント自身はまだ再描画されておらず、column変数は呼び出し時点のまま)
+      // そのため、choicesとweightsは必ず1回のonChangeにまとめて渡す
       const removeAt = (i: number) => {
-        set("choices", choices.filter((_, idx) => idx !== i));
-        set("weights", weights.filter((_, idx) => idx !== i));
+        onChange({
+          ...column,
+          choices: choices.filter((_, idx) => idx !== i),
+          weights: weights.filter((_, idx) => idx !== i),
+        });
       };
       const addChoice = () => {
-        set("choices", [...choices, `選択肢${choices.length + 1}`]);
-        set("weights", [...weights, 1]);
+        onChange({
+          ...column,
+          choices: [...choices, `選択肢${choices.length + 1}`],
+          weights: [...weights, 1],
+        });
       };
 
       return (

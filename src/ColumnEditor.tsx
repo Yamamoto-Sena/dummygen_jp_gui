@@ -1,3 +1,6 @@
+// 1テーブル分のカラム(列)一覧を編集する画面。列の追加・削除・複製・上下移動・
+// ドラッグ&ドロップでの並べ替えをここで扱い、実際の1列分の入力フォーム(型ごとの
+// 追加設定・NULL率・unique等)はColumnRowに委譲する
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { ColumnRow } from "./ColumnRow";
@@ -31,6 +34,7 @@ export function ColumnEditor({ columns, onChange, otherTables }: Props) {
     onChange(next);
   };
 
+  // ドラッグ中の列(fromIndex)を、ドラッグ先(toIndex)の位置まで動かす(ColumnRowのドラッグ&ドロップから呼ばれる)
   const moveTo = (fromIndex: number, toIndex: number) => {
     if (fromIndex === toIndex) return;
     const next = [...columns];

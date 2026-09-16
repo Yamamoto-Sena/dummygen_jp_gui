@@ -30,20 +30,32 @@ async function readCsvText(file: File): Promise<string> {
 // カラム設定に反映する機能。読み込んだCSVの中身はブラウザのメモリ上でのみ扱い、
 // 外部への送信・保存はしない
 export function SampleCsvImport({ columns, onImport }: Props) {
+  // useRef(null)は「画面が再描画されても値を覚えておける入れ物」を作るReactの仕組みで、
+  // ここでは実際の<input type="file">のDOM要素(画面上の部品そのもの)への参照を保持する。
+  // ボタンを押したときにfileInputRef.current?.click()でこの隠れた<input>を
+  // プログラムからクリックしたことにする、という使い方をする(下のreturn部分を参照)
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = async (file: File) => {
     const text = await readCsvText(file);
+    // 完全に空の行(1列だけで中身も空文字)を除外する。!(...)は「条件を反転する」ので、
+    // 「1列だけかつ空文字、ではない行だけを残す」という意味になる
     const rows = parseCsv(text).filter((r) => !(r.length === 1 && r[0] === ""));
     if (rows.length === 0) {
       window.alert("CSVを読み取れませんでした(空のファイルです)");
       return;
     }
 
+    // "const [header, ...dataRows] = rows;"は配列の分割代入とレスト構文の組み合わせで、
+    // 「先頭の1行をheaderとして取り出し、残り全部をdataRowsという配列にまとめる」という意味
+    // (CSVの1行目は列名の行なので、データ行と分けて扱う)
     const [header, ...dataRows] = rows;
     const scanned = dataRows.slice(0, MAX_SCANNED_ROWS);
 
+    // header(列名の一覧)を1つずつ処理して、対応するColumnConfigの一覧を作る
     const imported: ColumnConfig[] = header.map((rawName, colIndex) => {
+      // Set<string>は「同じ値を2回以上持てない」集合。ここでは「もう選択肢として
+      // 拾った値」を覚えておき、同じ値を2回選択肢に入れないようにするために使う
       const seen = new Set<string>();
       const values: string[] = [];
       for (const row of scanned) {
@@ -54,6 +66,8 @@ export function SampleCsvImport({ columns, onImport }: Props) {
         if (values.length >= MAX_CHOICES_PER_COLUMN) break;
       }
       const column = newColumn(rawName.trim() || `column${colIndex + 1}`, "enum");
+      // 実際に値が見つかっていればそれをchoicesにし、1つも見つからなければ
+      // (空列だった場合)newColumnが用意したデフォルトの選択肢のままにする
       return { ...column, choices: values.length > 0 ? values : column.choices };
     });
 

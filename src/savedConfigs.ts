@@ -30,7 +30,11 @@ const LAST_SESSION_KEY = "dummygen_jp_last_session";
 const SAVED_CONFIGS_KEY = "dummygen_jp_saved_configs";
 
 // 保存されていたデータが新形式(tablesを持つ)ならそのまま、旧形式(columnsを直接持つ、
-// テーブル1個だけの形式)ならAppStateへ変換する。どちらでもなければnull(壊れたデータ扱い)
+// テーブル1個だけの形式)ならAppStateへ変換する。どちらでもなければnull(壊れたデータ扱い)。
+// 引数がunknown型(「型が不明な値」を表すTypeScriptの型)なのは、localStorageから
+// 読み出した直後のJSONは中身が保証されていない(誰かが手で書き換えているかもしれない)ため。
+// "as 型"は「この値をその型として扱ってよい」とTypeScriptに伝えるキャストで、
+// 実行時のチェック(Array.isArray等)と組み合わせて安全性を確保している
 function migrateAppState(raw: unknown): AppState | null {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown>;

@@ -1,3 +1,6 @@
+// 出力フォーマット(CSV/SQL/Excel)・文字コード・quote_all(CSVの値を""で囲むか)を選び、
+// 「ファイルに書き出す」ボタンを押すパネル。実際の生成処理はここでは行わず、
+// 選んだ設定をonGenerate()経由で親(App.tsx)に伝えるだけ
 import { Loader2, Save, TriangleAlert } from "lucide-react";
 import { ProgressBar } from "./ProgressBar";
 import type { GenerationProgress, OutputEncoding, OutputFormat } from "./types";
@@ -62,6 +65,8 @@ export function ExportPanel({
         </div>
       </div>
 
+      {/* "条件 && (中身)"はReactの書き方で、「条件がtrueのときだけ中身を表示する」という意味
+          (falseのときは何も表示しない)。ここではformatが"csv"のときだけこの欄を表示する */}
       {format === "csv" && (
         <div className="flex flex-col gap-1">
           <label className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200 cursor-pointer">
@@ -74,6 +79,7 @@ export function ExportPanel({
         </div>
       )}
 
+      {/* こちらは"条件 ? A : B"という三項演算子で、「xlsxならA(注意書き)、それ以外(csv/sql)ならB(文字コード選択)」を出し分ける */}
       {format === "xlsx" ? (
         <div className="flex flex-col gap-2">
           <p className="text-xs text-slate-400 dark:text-slate-500">

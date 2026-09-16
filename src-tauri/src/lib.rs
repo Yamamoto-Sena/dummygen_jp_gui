@@ -1,3 +1,10 @@
+// Tauriデスクトップアプリ側のRustコード。フロントエンド(src/*.tsx、React)からは
+// `invoke("コマンド名", { ... })`で下の`#[tauri::command]`関数を呼び出す。
+// 実際の生成ロジックはここには無く、`dummy_data_gen`(親フォルダのRustライブラリ)を
+// 呼び出すだけの薄いラッパーに徹している(単一テーブル用: generate_dummy_data/preview_dummy_data、
+// 複数テーブル用: generate_dummy_data_multi/preview_dummy_data_multi、
+// YAML入出力: export_schema_yaml/import_schema_yaml)。同じ役割を普通のブラウザ向けに
+// 提供する`src-server`にも、ほぼ同じ処理をHTTPハンドラの形で書いた対応物がある。
 use dummy_data_gen::{
     generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables, resolve_fk_reprs,
     resolve_foreign_keys, resolve_unique_pools, schema_file_to_yaml, topological_order, write_csv_streaming,
@@ -22,7 +29,7 @@ struct GenerateRequest {
     row_count: u32,
     columns: Vec<ColumnDef>,
     table_name: Option<String>,
-    // "csv" または "sql"
+    // "csv" / "sql" / "xlsx"
     format: String,
     // "utf8" または "sjis"。日本語版Excel等でShift-JISを前提とするアプリで開く場合はsjisを選ぶ
     encoding: String,
@@ -74,6 +81,10 @@ struct PreviewRequestMulti {
 /// generate_all_rowsを使うため、実際に生成される値の形式(整合性・重複無しなど)は
 /// 本番と完全に一致する。件数が少ないのでストリーミング書き込みは使わず、
 /// メモリ上に持ったままJSON化して返すだけでよい。ファイルには一切保存しない。
+// #[tauri::command]を付けた関数は、フロントエンド(React)からinvoke("関数名", {...})で
+// 直接呼び出せるようになる(TauriがJavaScript側とRust側の橋渡しを自動でしてくれる)。
+// 戻り値がResult<成功の型, String>になっているのは、Tauriのコマンドはエラーを
+// 文字列でしか返せない決まりのため(map_err(|e| e.to_string())で変換している)
 #[tauri::command]
 fn preview_dummy_data(request: PreviewRequest) -> Result<PreviewResult, String> {
     // PreparedColumnは列名を外部に公開していないため、渡されたColumnDefから先に控えておく
@@ -94,10 +105,18 @@ fn preview_dummy_data(request: PreviewRequest) -> Result<PreviewResult, String> 
 /// generate_multi_table_rowsは本番のgenerate_dummy_data_multiと共通)
 #[tauri::command]
 fn preview_dummy_data_multi(request: PreviewRequestMulti) -> Result<Vec<PreviewResult>, String> {
+    // 外側のmapで「テーブルごと」、内側のmapで「そのテーブルの列ごと」に処理する
+    // 二重のmap(二重ループのイテレータ版)。結果はVec<Vec<String>>(テーブルごとの
+    // 列名一覧のリスト)になる
     let headers_by_table: Vec<Vec<String>> =
         request.tables.iter().map(|t| t.columns.iter().map(|c| c.name.clone()).collect()).collect();
 
     let sample_size = request.sample_size.unwrap_or(PREVIEW_SAMPLE_SIZE);
+    // 各テーブルのrow_countを、プレビュー用の少ない件数に差し替える。
+    // into_iter()は「一覧の中身の所有権をもらいながら1つずつ取り出す」メソッド(iter()と違い、
+    // 取り出した後は元のrequest.tablesを使えなくなるが、その分値をそのまま使い回せる)。
+    // t.row_count.min(sample_size).max(1)は「sample_sizeとrow_countの小さい方を採用し、
+    // それでも1件は下回らないようにする」計算(row_countが0でもプレビューが空にならないため)
     let sample_tables: Vec<Schema> = request
         .tables
         .into_iter()
@@ -117,6 +136,11 @@ fn preview_dummy_data_multi(request: PreviewRequestMulti) -> Result<Vec<PreviewR
     let rows_by_table =
         generate_multi_table_rows(&mut tables, &order, &referenced, seed, |_, _| {}).map_err(|e| e.to_string())?;
 
+    // headers_by_table(テーブルごとの列名一覧)とrows_by_table(テーブルごとの生成結果)を
+    // 組み合わせて、テーブルごとの最終的な結果(PreviewResult)にまとめる。
+    // enumerate()で「0番目、1番目、…」の連番(i)を一緒に取り出し、そのiでrows_by_table
+    // から対応する行データを引く。clone()で複製し、unwrap_or_default()は
+    // 「値がNoneなら、その型の初期値(空のVec)を代わりに使う」という意味
     Ok(headers_by_table
         .into_iter()
         .enumerate()
@@ -135,12 +159,20 @@ fn pick_save_path(app: tauri::AppHandle, default_name: String, filter_name: Stri
         let _ = window.set_focus();
     }
 
+    // blocking_save_file()はダイアログを表示し、ユーザーが選び終えるまで待つメソッドで、
+    // 選ばれればSome(選択結果)、キャンセルされればNoneを返す。戻り値の型がOption<String>の
+    // この関数では、Resultの?と同様にOptionにも?が使え、「Noneだったらこの関数もすぐ
+    // Noneを返して終わる」という意味になる(この場合はキャンセル扱いなのでエラーにはしない)
     let picked = app
         .dialog()
         .file()
         .set_file_name(&default_name)
         .add_filter(&filter_name, &[extension.as_str()])
         .blocking_save_file()?;
+    // into_path()はOSごとの生のパス表現(Result)に変換し、.ok()でErrをNoneにする
+    // (パス変換に失敗する状況は通常ありえないため、詳細なエラーは捨てて良いという判断)。
+    // to_string_lossy()は「パスに万一おかしな文字が含まれていても、置き換えて
+    // 必ず文字列にする」変換で、mapでOptionの中身にだけこの変換を適用している
     picked.into_path().ok().map(|p| p.to_string_lossy().to_string())
 }
 
@@ -194,9 +226,9 @@ fn import_schema_yaml(app: tauri::AppHandle) -> Result<Option<ImportedSchemaFile
     Ok(Some(ImportedSchemaFile { tables: file.tables, multi_table: file.multi_table }))
 }
 
-/// 列定義からダミーデータを生成し、指定されたパスにCSVまたはSQLとして保存する。
-/// dummy_data_genのストリーミング書き込み(write_csv_streaming/write_sql_streaming)を
-/// そのまま使うことで、大量行(最大100万行)でもメモリを圧迫しない。
+/// 列定義からダミーデータを生成し、指定されたパスにCSV/SQL/Excel(xlsx)として保存する。
+/// CSV/SQLはdummy_data_genのストリーミング書き込み(write_csv_streaming/write_sql_streaming)を
+/// そのまま使うことで、大量行(最大100万行)でもメモリを圧迫しない(xlsxだけは後述の理由でこの限りではない)。
 /// 同期関数のままでよい: Tauriは非asyncコマンドを内部でブロッキングスレッドプールに
 /// ディスパッチするため、ここで生成に数秒かかってもUIスレッドは固まらない。
 #[tauri::command]
@@ -279,17 +311,35 @@ fn run_generate_multi(
     quote_all: bool,
     mut on_table_start: impl FnMut(usize, &dummy_data_gen::PreparedTable),
 ) -> Result<(), String> {
+    // ここから先は、複数テーブルのダミーデータを作って保存するまでの一連の手順。
+    // dummy_data_gen(親フォルダのRustライブラリ)側の関数を、決まった順番で呼んでいくだけ
+    //   1. SchemaFileを組み立てる(テーブル一覧をまとめた形にする)
+    //   2. prepare_tables: 各テーブルの列定義を検証し、生成に使える形に変換する
+    //   3. resolve_foreign_keys: 外部キー(他のテーブルの値を参照する列)の依存関係を調べる
+    //   4. topological_order: 親テーブルを先に、子テーブルを後に生成できるよう順番を決める
+    //   5. resolve_fk_reprs: 外部キー列の値の型(数値/文字列など)を確定する
+    //   6. generate_multi_table_rows: 決めた順番通りに、実際の行データを作る
+    //   7. できた行データをファイルに書き出す(この後に続く処理)
+    // map_err(|e| e.to_string())は、各手順が返すエラーを「文字列のエラーメッセージ」に
+    // 変換している(Tauriコマンドは文字列のエラーしか返せない決まりのため)。
+    // ?は「エラーだったら、その場でこの関数自体もエラーとして終わらせる」というRustの構文
     let schema_file = SchemaFile { tables, multi_table: true };
     let mut tables = prepare_tables(&schema_file).map_err(|e| e.to_string())?;
     let (deps, referenced) = resolve_foreign_keys(&mut tables).map_err(|e| e.to_string())?;
     let order = topological_order(&deps, &tables).map_err(|e| e.to_string())?;
     resolve_fk_reprs(&mut tables, &order).map_err(|e| e.to_string())?;
 
+    // 乱数シード: 指定があればそれを使い(同じ設定なら毎回同じデータになる)、
+    // 無ければunwrap_or_elseでその場でランダムな値を1回だけ作って使う
     let base_seed = seed.unwrap_or_else(rand::random);
     let rows_by_table =
         generate_multi_table_rows(&mut tables, &order, &referenced, base_seed, |i, t| on_table_start(i, t))
             .map_err(|e| e.to_string())?;
 
+    // 依存順(親→子)に並んでいるorderの各テーブル番号(&i)について、テーブル名・列定義・
+    // 生成済みの行データをひとまとめ(GeneratedTable)にする。.map(...)で1テーブルずつ変換し、
+    // .collect()で最後にVec(リスト)にまとめる。as_ref().unwrap()は「必ず値が入っているはず」
+    // という前提でOptionの中身を取り出す(このテーブルは生成済みなので必ずSomeになっている)
     let generated: Vec<GeneratedTable> = order
         .iter()
         .map(|&i| GeneratedTable {
@@ -299,6 +349,8 @@ fn run_generate_multi(
         })
         .collect();
 
+    // フロントエンドから来た文字列("csv"等)を、Rust側の型(Encoding/Format)に変換する。
+    // matchで文字列の中身を見て、どれにも当てはまらなければother(その他)としてエラーにする
     let encoding = match encoding {
         "sjis" => Encoding::Sjis,
         _ => Encoding::Utf8,

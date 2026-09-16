@@ -85,6 +85,13 @@ export function useDummyGen() {
     return invoke<string | null>("pick_save_path", { defaultName, filterName, extension });
   }, []);
 
+  // useCallbackは「この関数を、依存する値([]の中身)が変わらない限り毎回作り直さない」
+  // ようにするReactの仕組み(パフォーマンス最適化のため。[]が空なので、この関数は最初の
+  // 1回だけ作られてずっと使い回される)。
+  // try/catch/finallyは「tryの中を実行し、エラーが起きたらcatchで受け止め、
+  // 成功しても失敗しても最後にfinallyを必ず実行する」というJavaScript標準の構文。
+  // ここではfinallyでsetIsGenerating(false)を呼ぶことで、成功時もエラー時も
+  // 必ず「生成中」の状態を解除している
   const generate = useCallback(async (request: GenerateRequest) => {
     setError(null);
     setIsGenerating(true);
@@ -94,7 +101,11 @@ export function useDummyGen() {
         await invoke("generate_dummy_data", { request });
       } else {
         // ブラウザではファイルの中身をレスポンスとして受け取り、ダウンロードさせる。
-        // output_pathはTauri版と違い実在のパスではなく、ダウンロード時のファイル名の候補として扱う
+        // output_pathはTauri版と違い実在のパスではなく、ダウンロード時のファイル名の候補として扱う。
+        // "const { output_path, ...rest } = request;"は分割代入とレスト構文の組み合わせで、
+        // 「output_pathだけを取り出し、残り全部(...rest)を別のオブジェクトにまとめる」という書き方。
+        // 次の行の"{ ...rest, file_name: output_path }"は、その残り全部をコピーしつつ
+        // file_nameという新しい名前でoutput_pathの値を追加している
         const { output_path, ...rest } = request;
         const res = await apiPost("/api/generate", { ...rest, file_name: output_path });
         const blob = await res.blob();

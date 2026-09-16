@@ -97,6 +97,8 @@ export const GROUP_COLORS: Record<ColumnTypeMeta["group"], { border: string; bad
 // Rust側は`#[serde(tag = "type")]`の内部タグ付きenumなので、typeとその他のフィールドを
 // 同じ階層に並べて送るとそのままデシリアライズできる。使わない型のフィールドが
 // 残っていても、Rust側は無視するだけなのでエラーにはならない。
+// フィールド名の後ろの"?"は「無くてもよい(オプショナル)」という意味のTypeScriptの記法で、
+// min/maxのように一部の列タイプでしか使わない設定は、全部このように"?"付きにしてある
 export interface ColumnConfig {
   name: string;
   type: string;
@@ -162,6 +164,10 @@ export interface SchemaFileResult {
   multi_table: boolean;
 }
 
+// 新しい列(または型を変更した列)を作るための関数。列タイプによって必要な追加設定
+// (min/max、choicesなど)が違うため、typeを見てそれぞれに合った初期値を持たせて返す。
+// ColumnRow.tsxで型のプルダウンを変更したときも、この関数が呼ばれて古い列を作り直す
+// (これにより、型を変えたときに前の型の設定が残ってしまうことを防いでいる)
 export function newColumn(name: string, type: string): ColumnConfig {
   const base: ColumnConfig = { name, type };
   switch (type) {

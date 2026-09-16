@@ -1,6 +1,11 @@
+// 列の型ごとに変わる追加設定フォーム(min/max、日付範囲、選択肢と出現比率、外部キーの参照先など)を
+// switch文で出し分けるコンポーネント。「型を選んだら、その型に必要な入力欄だけが増える」画面の
+// 中心部分にあたる
 import { Plus, Trash2 } from "lucide-react";
 import type { ColumnConfig, DateFormat } from "./types";
 
+// interfaceは「このコンポーネントがどんなprops(親から受け取る値)を必要とするか」を
+// TypeScriptに教えるための型定義。?が付いているotherTablesは「無くてもよい(省略可能)」という意味
 interface Props {
   column: ColumnConfig;
   onChange: (column: ColumnConfig) => void;
@@ -13,11 +18,22 @@ const inputClass =
   "w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500";
 const labelClass = "text-xs text-slate-500 dark:text-slate-400";
 
-// 選択中の列タイプに応じて、min/max・choicesなどの追加設定フォームを出し分ける
+// 選択中の列タイプに応じて、min/max・choicesなどの追加設定フォームを出し分ける。
+// "{ column, onChange, otherTables }: Props"は、Propsの中から3つの値だけを
+// 名前で取り出す書き方(分割代入と呼ぶ。他の言語で言う「引数をまとめて受け取って展開する」に近い)
 export function ColumnTypeFields({ column, onChange, otherTables }: Props) {
+  // set(...)は「columnのkeyというフィールドだけをvalueに書き換えた、新しいcolumnを
+  // 作ってonChangeに渡す」ための小さなヘルパー関数。
+  // "{ ...column, [key]: value }"は、まずcolumnの中身を全部コピーし(...はスプレッド構文と
+  // 呼ぶ)、その後で[key]の部分だけvalueに上書きする、というオブジェクトの作り方。
+  // <K extends keyof ColumnConfig>は「KはColumnConfigが持っているフィールド名のどれか」
+  // という制約で、これにより「存在しないフィールド名を指定するとエラーになる」安全性が生まれる
   const set = <K extends keyof ColumnConfig>(key: K, value: ColumnConfig[K]) =>
     onChange({ ...column, [key]: value });
 
+  // column.type(選んでいる列タイプの文字列)によって、表示する入力欄を変える。
+  // switchは複数のif/elseをまとめて書ける構文で、column.typeの値がcaseの後の文字列と
+  // 一致する箇所が実行される(一致するcaseが無ければ末尾のdefaultが実行される)
   switch (column.type) {
     case "name_ja":
       return (
@@ -240,6 +256,9 @@ export function ColumnTypeFields({ column, onChange, otherTables }: Props) {
         </label>
       );
 
+    // references(例: "users.id")を「テーブル名」「列名」の2つの<select>に分けて編集する。
+    // Rust側に送るときは1本の文字列("テーブル名.列名")に戻す必要があるため、
+    // テーブルを選んだ時点では末尾に"."だけ付けた不完全な形("users.")を一旦保持しておく
     case "foreign_key": {
       const tables = otherTables ?? [];
       const [refTable, refColumn] = (column.references ?? "").split(".");

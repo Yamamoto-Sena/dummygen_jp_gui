@@ -1,3 +1,6 @@
+// カラム(列)1個分の設定行。列名・型の選択・(型ごとに変わる)追加設定フォーム(ColumnTypeFieldsに委譲)・
+// NULL率・重複しない値にする(unique)の入力に加えて、上下移動・複製・削除・ドラッグでの並べ替えの
+// ボタンを持つ。1行分の見た目と操作をまとめて担当し、実際の状態(ColumnConfig)は親(ColumnEditor)が持つ
 import { ChevronDown, ChevronUp, Copy, GripVertical, Trash2 } from "lucide-react";
 import { COLUMN_TYPES, GROUP_COLORS, newColumn, type ColumnConfig } from "./types";
 import { ColumnTypeFields } from "./ColumnTypeFields";
@@ -127,6 +130,8 @@ export function ColumnRow({
             onChange={(e) => onChange({ ...column, null_rate: Number(e.target.value) })}
           />
         </label>
+        {/* ?と:を使った三項演算子(条件分岐)。ALWAYS_UNIQUE_REASONSに理由の文字列があれば
+            (=sequenceかemailなら)それを表示し、無ければ(それ以外の型なら)下のチェックボックスを表示する */}
         {ALWAYS_UNIQUE_REASONS[column.type] ? (
           <span className="text-slate-400 dark:text-slate-500">{ALWAYS_UNIQUE_REASONS[column.type]}</span>
         ) : (

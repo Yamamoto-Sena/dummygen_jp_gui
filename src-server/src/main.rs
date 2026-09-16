@@ -69,6 +69,8 @@ struct GenerateRequestMultiWeb {
     format: String,
     encoding: String,
     seed: Option<u64>,
+    // trueのとき、CSV出力の全ての値をダブルクォートで囲む(GenerateRequestWeb.quote_allと同じ意味。
+    // format以外の形式(sql/xlsx)には影響しない。run_generate_multiがそのままwrite_output_multi_tableに渡す)
     quote_all: bool,
 }
 
@@ -248,11 +250,26 @@ fn run_generate(request: GenerateRequestWeb, output_path: &str) -> Result<(), Ap
     result.map_err(internal_error)
 }
 
+// asyncが付いた関数は「非同期関数」で、時間のかかる処理の間、他のリクエストの処理を
+// ブロックしない(サーバーが1つの処理待ちで固まらない)ようにする仕組み。呼び出す側は
+// .awaitを付けて「この処理が終わるまで(他の作業を挟みながら)待つ」という意味になる。
+// Json(request)は、axum(HTTPサーバーのライブラリ)が「リクエストのJSON本体を
+// GenerateRequestWebに変換して取り出す」ためのお決まりの書き方
 async fn generate(Json(request): Json<GenerateRequestWeb>) -> Result<Response, ApiError> {
     let file_name = request.file_name.clone().unwrap_or_else(|| default_file_name(&request.format));
     let file_name_for_task = file_name.clone();
 
+    // tokio::task::spawn_blocking(...)は「時間のかかる重い処理(ここではファイル生成)を、
+    // 専用の別スレッドに任せて実行する」仕組み。ダミーデータの生成はCPUを使う重い処理なので、
+    // 普通にここで直接実行するとサーバー全体が一時的に固まってしまうため、これを避けている。
+    // moveは「このクロージャ(無名関数)の中で、外の変数(request等)の所有権をもらう」という
+    // 指定(スレッドをまたぐには、値を安全に受け渡す必要があるため)。
+    // .await の後の ?? は「?が2回続いている」という意味で、1つ目はspawn_blocking自体が
+    // 失敗した場合(スレッドの実行に失敗)、2つ目はその中の処理(run_generate等)が
+    // 失敗した場合、のそれぞれに対応している(spawn_blockingの結果はResult<Result<...>>という
+    // 「二重の成功/失敗」を表す形になるため)
     let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, ApiError> {
+        // tempfile::tempdir()はOSの一時フォルダの中に、自動で消える専用フォルダを作る
         let tmp_dir = tempfile::tempdir().map_err(internal_error)?;
         let output_path = tmp_dir.path().join(&file_name_for_task);
         run_generate(request, &output_path.to_string_lossy())?;
@@ -264,6 +281,15 @@ async fn generate(Json(request): Json<GenerateRequestWeb>) -> Result<Response, A
     Ok(file_response(bytes, &file_name))
 }
 
+// 複数テーブルのダミーデータを作って保存するまでの一連の手順(src-tauri/src/lib.rsの
+// run_generate_multiとほぼ同じ処理をHTTPハンドラ向けに書いたもの)。
+//   1. SchemaFileを組み立てる(テーブル一覧をまとめた形にする)
+//   2. prepare_tables: 各テーブルの列定義を検証し、生成に使える形に変換する
+//   3. resolve_foreign_keys: 外部キー(他のテーブルの値を参照する列)の依存関係を調べる
+//   4. topological_order: 親テーブルを先に、子テーブルを後に生成できるよう順番を決める
+//   5. resolve_fk_reprs: 外部キー列の値の型(数値/文字列など)を確定する
+//   6. generate_multi_table_rows: 決めた順番通りに、実際の行データを作る
+//   7. できた行データをファイルに書き出す(この後に続く処理)
 fn run_generate_multi(request: GenerateRequestMultiWeb, output_base_path: &str) -> Result<Vec<(String, u32)>, ApiError> {
     let schema_file = SchemaFile { tables: request.tables, multi_table: true };
     let mut tables = prepare_tables(&schema_file).map_err(bad_request)?;
@@ -271,10 +297,14 @@ fn run_generate_multi(request: GenerateRequestMultiWeb, output_base_path: &str) 
     let order = topological_order(&deps, &tables).map_err(bad_request)?;
     resolve_fk_reprs(&mut tables, &order).map_err(bad_request)?;
 
+    // 乱数シード: 指定があればそれを使い、無ければunwrap_or_elseでその場でランダムな値を作る
     let base_seed = request.seed.unwrap_or_else(rand::random);
     let rows_by_table = generate_multi_table_rows(&mut tables, &order, &referenced, base_seed, |_, _| {})
         .map_err(bad_request)?;
 
+    // 依存順(親→子)の各テーブル番号(&i)について、テーブル名・列定義・生成済みの行データを
+    // ひとまとめ(GeneratedTable)にする。as_ref().unwrap()は「必ず値が入っているはず」という
+    // 前提でOptionの中身を取り出す(このテーブルは生成済みなので必ずSomeになっている)
     let generated: Vec<GeneratedTable> = order
         .iter()
         .map(|&i| GeneratedTable {
@@ -284,6 +314,7 @@ fn run_generate_multi(request: GenerateRequestMultiWeb, output_base_path: &str) 
         })
         .collect();
 
+    // リクエストの文字列("csv"等)を、Rust側の型(Encoding/Format)に変換する
     let encoding = match request.encoding.as_str() {
         "sjis" => Encoding::Sjis,
         _ => Encoding::Utf8,
@@ -326,6 +357,10 @@ async fn generate_multi(Json(request): Json<GenerateRequestMultiWeb>) -> Result<
                 .unwrap_or_else(|| "output".to_string());
             Ok((bytes, name))
         } else {
+            // 複数ファイルできた場合は、zipクレート(zip圧縮ファイルを作るライブラリ)を使って
+            // 1つのoutput.zipにまとめる。ZipWriterは「これから中身を追加していくzipファイル」を
+            // 表すオブジェクトで、start_file(名前, オプション)で「次に書き込む中身のファイル名」を
+            // 指定してから、実際のバイト列をwrite_allで書き込む、という流れを各ファイルについて繰り返す
             let zip_path = tmp_dir.path().join("output.zip");
             let zip_file = std::fs::File::create(&zip_path).map_err(internal_error)?;
             let mut zip = zip::ZipWriter::new(zip_file);
@@ -339,6 +374,8 @@ async fn generate_multi(Json(request): Json<GenerateRequestMultiWeb>) -> Result<
                 let data = std::fs::read(path).map_err(internal_error)?;
                 std::io::Write::write_all(&mut zip, &data).map_err(internal_error)?;
             }
+            // finish()で「これ以上ファイルを追加しない」ことを確定させ、zip形式として
+            // 正しく閉じる(この呼び出しをしないと壊れたzipファイルになる)
             zip.finish().map_err(internal_error)?;
             let bytes = std::fs::read(&zip_path).map_err(internal_error)?;
             Ok((bytes, "output.zip".to_string()))
@@ -560,12 +597,23 @@ mod tests {
     }
 }
 
+// #[tokio::main]は「この非同期のmain関数を、tokio(非同期処理を実行してくれる基盤)の上で
+// 動かす」という指定。これを付けることで、この関数の中でasync/awaitやspawn_blockingが使える
 #[tokio::main]
 async fn main() {
+    // 環境変数(OSに設定された値)からdist_dir/portを読み取る。std::env::var(...)は
+    // 「環境変数が無ければErr」を返すので、unwrap_or_else(...)で「無ければこの既定値を使う」
+    // という代替処理をつなげている。concat!/env!はコンパイル時に文字列を組み立てるマクロ
     let dist_dir = std::env::var("DUMMYGEN_DIST_DIR")
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../dist").to_string());
+    // .ok()でResultをOptionに変換し、.and_then(...)で「値があれば次の変換(文字列→数値)も
+    // 試す」、最後にunwrap_or(3000)で「どこかで失敗したら既定値3000を使う」という一連の流れ
     let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(3000);
 
+    // Routerは「どのURLパスに、どんな処理(ハンドラ関数)を対応させるか」を登録していく
+    // axum(HTTPサーバーのライブラリ)の仕組み。.route("パス", get(...)または post(...))で
+    // 1つずつ結びつけ、layer(...)で「全部のルートに共通の設定(ここではリクエストの
+    // 最大サイズ)」を追加する
     let api = Router::new()
         .route("/api/health", get(health))
         .route("/api/preview", post(preview))
@@ -576,10 +624,17 @@ async fn main() {
         .route("/api/import_schema_yaml", post(import_schema_yaml))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
 
+    // fallback_serviceは「上のどのAPIルートにも一致しなかったリクエストの行き先」を指定する。
+    // ServeDir::new(&dist_dir)は「フォルダの中身をそのままファイルとして配信する」仕組みなので、
+    // 「/api/... 以外は全部、画面のビルド結果(dist)から探して返す」という設定になる
     let app = api.fallback_service(ServeDir::new(&dist_dir));
 
     let addr = format!("0.0.0.0:{port}");
     println!("DummyGen JP サーバーを起動しました: http://localhost:{port} (配信フォルダ: {dist_dir})");
+    // TcpListener::bind(...)で指定したアドレス・ポートで接続を待ち受け始め、
+    // axum::serve(...)がそこに来たリクエストをRouter(app)に振り分け続ける。
+    // expect(...)は「失敗したら、このメッセージを表示してプログラムを止める」という意味
+    // (サーバー起動時にポートが使用中だった場合などがこれに当たる)
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("ポートの待ち受けに失敗しました");
     axum::serve(listener, app).await.expect("サーバーの実行中にエラーが発生しました");
 }

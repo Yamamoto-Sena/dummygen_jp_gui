@@ -1,3 +1,4 @@
+// 生成中の進捗を「done / total (◯%)」の帯グラフで表示するだけの小さな部品
 interface Props {
   done: number;
   total: number;

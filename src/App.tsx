@@ -1,3 +1,19 @@
+// 画面全体の入れ物となるコンポーネント。テーブル一覧(tables)・出力設定(format/encoding/quoteAll)
+// といった画面全体の状態をここでまとめて持ち、各パネル(ColumnEditor/ExportPanel/PreviewTable等)に
+// propsとして配って組み立てる「親」の役割。生成・プレビュー等の実際の処理自体はuseDummyGenフックに
+// 任せていて、このファイルは「画面のどの部分に何を表示するか」の組み立てに専念している。
+//
+// ここで使うReact(このアプリが使っている画面作りのライブラリ)の基本的な仕組みを先に説明する:
+//   - コンポーネント: 画面の一部分を表す関数(このApp()自体も1つのコンポーネント)。
+//     関数の中でHTMLに似た書き方(JSXと呼ぶ)を書いて、それがそのまま画面の見た目になる
+//   - props: 親のコンポーネントから子のコンポーネントに渡す「引数」。例えば
+//     <ExportPanel format={format} ... /> のformat={format}の部分がpropsにあたる
+//   - useState: 「値が変わったら画面を自動的に描き直してほしいデータ」を持つための仕組み。
+//     `const [値, 値を変える関数] = useState(初期値)`という形で使い、値を変える関数を
+//     呼ぶとReactが自動的にその値を使っている部分の画面を再描画する
+//   - useEffect: 「画面が表示された後」や「特定の値が変わった後」に実行したい処理を書く仕組み。
+//     `useEffect(() => { 処理 }, [依存する値のリスト])`という形で使い、依存する値のリストに
+//     入っている値が変わるたびに処理が再実行される(空配列[]なら「最初の1回だけ」という意味になる)
 import { useEffect, useState } from "react";
 import { Dices, Moon, Sun } from "lucide-react";
 import { ColumnEditor } from "./ColumnEditor";
@@ -56,19 +72,25 @@ const DEFAULT_TABLE: TableConfig = {
 };
 
 function App() {
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
-  const [tables, setTables] = useState<TableConfig[]>([DEFAULT_TABLE]);
-  const [activeTableId, setActiveTableId] = useState<string>(DEFAULT_TABLE.id);
-  const [format, setFormat] = useState<OutputFormat>("csv");
-  const [encoding, setEncoding] = useState<OutputEncoding>("utf8");
-  const [quoteAll, setQuoteAll] = useState(false);
-  const [successPath, setSuccessPath] = useState<string | null>(null);
-  const [previewSize, setPreviewSize] = useState(DEFAULT_PREVIEW_SAMPLE_SIZE);
-  const [previewByTable, setPreviewByTable] = useState<Record<string, PreviewResult>>({});
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>([]);
-  const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
+  // 画面全体で覚えておく必要がある状態を、useStateで1つずつ持つ。
+  // 各行は「[今の値, その値を変える関数] = useState(初期値)」という同じ形をしている
+  const [theme, setTheme] = useState<"light" | "dark">("dark"); // 配色(ライト/ダーク)
+  const [tables, setTables] = useState<TableConfig[]>([DEFAULT_TABLE]); // テーブル一覧(列設定を含む)
+  const [activeTableId, setActiveTableId] = useState<string>(DEFAULT_TABLE.id); // 今選んでいるテーブルのid
+  const [format, setFormat] = useState<OutputFormat>("csv"); // 出力フォーマット(csv/sql/xlsx)
+  const [encoding, setEncoding] = useState<OutputEncoding>("utf8"); // 文字コード(utf8/sjis)
+  const [quoteAll, setQuoteAll] = useState(false); // CSVの値を""で囲むか
+  const [successPath, setSuccessPath] = useState<string | null>(null); // 生成成功時に表示するファイル名
+  const [previewSize, setPreviewSize] = useState(DEFAULT_PREVIEW_SAMPLE_SIZE); // プレビューの表示件数
+  const [previewByTable, setPreviewByTable] = useState<Record<string, PreviewResult>>({}); // テーブルidごとのプレビュー結果
+  const [previewError, setPreviewError] = useState<string | null>(null); // プレビュー取得に失敗したときのメッセージ
+  const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>([]); // 保存済み設定の一覧
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false); // 「メニュー」ボタンの開閉状態
 
+  // useDummyGen()は「Tauri/ブラウザとのやり取り」をまとめて持つ自作フック(useDummyGen.ts参照)。
+  // 分割代入({ ... } = ...)でその中の値・関数だけを取り出して使う。
+  // "preview: fetchPreview"は「previewという名前で受け取るが、このファイルの中では
+  // fetchPreviewという別名で使う」という書き方(他の変数名とかぶらないようにするため)
   const {
     pickSavePath,
     generate,
@@ -83,11 +105,17 @@ function App() {
     error,
   } = useDummyGen();
 
+  // find(...)は「条件に一致する最初の要素を探す(無ければundefined)」メソッド。
+  // "??"は「左側がnull/undefinedのときだけ右側を使う」演算子(Nullish coalescingと呼ぶ)ので、
+  // このactiveTableは「activeTableIdに一致するテーブル、見つからなければ先頭のテーブル」になる
   const activeTable = tables.find((t) => t.id === activeTableId) ?? tables[0];
+  // filter(...)は「条件を満たす要素だけを残した新しい配列」を作るメソッド
   const otherTables = tables.filter((t) => t.id !== activeTable.id).map((t) => ({ name: t.name, columns: t.columns }));
   const isMultiTable = tables.length > 1;
 
-  // 前回終了時の設定状態を自動的に復元する(仕様書3.3)。保存済み設定の一覧もここで読み込む
+  // 前回終了時の設定状態を自動的に復元する(仕様書3.3)。保存済み設定の一覧もここで読み込む。
+  // 第2引数の[](空配列)は「この処理は画面が最初に表示されたときの1回だけ実行する」という指定
+  // (依存する値が無い=何が変わっても再実行しない、という意味になる)
   useEffect(() => {
     const last = loadLastSession();
     if (last) {
@@ -101,7 +129,12 @@ function App() {
   }, []);
 
   // テーブル一覧・エクスポート設定が変わるたびに、少し待ってから「前回の状態」として保存する
-  // (連続入力のたびに毎回書き込むと重くなるため500ms待つ)
+  // (連続入力のたびに毎回書き込むと重くなるため500ms待つ、という「デバウンス」というよくある手法)。
+  // setTimeoutは「指定した時間(ミリ秒)後に処理を実行する」関数、clearTimeoutは
+  // 「その予約をキャンセルする」関数。useEffectの中でreturnした関数は「次にこの
+  // useEffectが実行される前(または画面から消えるとき)に呼ばれる後片付け」になる。
+  // つまり、tables等が短時間に何度も変わっても、そのたびに前の予約はキャンセルされ、
+  // 「最後の変更から500ms操作が無かったとき」だけ実際に保存が行われる
   useEffect(() => {
     const timer = setTimeout(() => {
       saveLastSession({ tables, format, encoding, quoteAll });
@@ -184,19 +217,30 @@ function App() {
 
   const handleRenameTable = (id: string, name: string) => updateTable(id, (t) => ({ ...t, name }));
 
+  // 「ファイルに書き出す」ボタンが押されたときの処理。流れは次の3ステップ:
+  //   1. 生成前チェック(列が1つも無い/SQLなのにテーブル名が空、等の入力ミスがあれば何もせず戻る)
+  //   2. 保存先のファイルパスを選ぶ(Tauriならネイティブダイアログ、ブラウザならダウンロード名を決めるだけ)
+  //   3. テーブルが1個か2個以上かで、単一テーブル用/複数テーブル用のどちらの生成関数を呼ぶか分ける
   const handleGenerate = async () => {
     setSuccessPath(null);
+    // every(...)は「配列の全要素が条件を満たすか」を調べるメソッド。
+    // 「どのテーブルも列が1つも無い」なら生成しても意味が無いので、ここで処理をやめる(return)
     if (tables.every((t) => t.columns.length === 0)) return;
     if (format === "sql" && tables.length === 1 && activeTable.name.trim() === "") return;
+    // some(...)は「配列の中に条件を満たす要素が1つでもあるか」を調べるメソッド。
+    // 複数テーブルのときは、名前が空のテーブルが1つでもあれば処理をやめる
     if (isMultiTable && tables.some((t) => t.name.trim() === "")) return;
 
     const extension = format;
     const defaultName = format === "sql" ? "output.sql" : format === "xlsx" ? "output.xlsx" : "output.csv";
+    // pickSavePathはTauriならネイティブの保存ダイアログを開き、ブラウザなら
+    // (保存先という概念が無いので)defaultNameをそのまま返すだけになる(useDummyGen.ts参照)
     const outputPath = await pickSavePath(defaultName, extension.toUpperCase(), extension);
     if (!outputPath) return; // ダイアログでキャンセルされた
 
     let ok: boolean;
     if (!isMultiTable) {
+      // テーブルが1個だけのときは、今まで通り単一テーブル用のgenerate関数を呼ぶ
       const t = tables[0];
       ok = await generate({
         row_count: t.rowCount,
@@ -208,13 +252,20 @@ function App() {
         quote_all: quoteAll,
       });
     } else {
+      // テーブルが2個以上のときは、複数テーブル用のgenerateMulti関数を呼ぶ。
+      // map(...)で各テーブルの状態(TableConfig)を、Rust側が期待する形(SchemaInput、
+      // row_count/table_name/columnsという名前)に1つずつ変換してリストにする
       const request: SchemaInput[] = tables.map((t) => ({ row_count: t.rowCount, table_name: t.name, columns: t.columns }));
       ok = await generateMulti(request, format, encoding, outputPath, quoteAll);
     }
     if (ok) {
       // ブラウザ版の複数テーブルは、実際にダウンロードされるファイル名がoutputPathと異なる
       // (SQLは1ファイルだがCSVは2個以上のファイルをzipにまとめる。src-server/src/main.rsの
-      // generate_multiと同じ判定)。Tauri版・単一テーブルはoutputPathがそのまま実際の名前
+      // generate_multiと同じ判定)。Tauri版・単一テーブルはoutputPathがそのまま実際の名前。
+      // 三項演算子(条件 ? A : B)を入れ子にした書き方で、内側から読むと分かりやすい:
+      //   まず「複数テーブル かつ ブラウザ実行」でなければ、outputPathをそのまま使う
+      //   そうであれば、format(出力形式)を見て、sql→"output.sql"、xlsx→"output.xlsx"、
+      //   それ以外(csv、複数ファイルになるケース)→"output.zip" を選ぶ
       const downloadedName =
         isMultiTable && !isTauriRuntime()
           ? format === "sql"

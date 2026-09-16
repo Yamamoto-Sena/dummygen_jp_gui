@@ -51,7 +51,7 @@ struct PreviewResult {
 #[derive(serde::Deserialize)]
 struct GenerateRequestMulti {
     tables: Vec<Schema>,
-    // "csv" または "sql"(複数テーブルはGUIではこの2形式のみ対応。CLIのjson/xlsxはGUI未対応のまま)
+    // "csv" / "sql" / "xlsx"(複数テーブルもこの3形式に対応。CLIのjson出力のみGUI未対応のまま)
     format: String,
     encoding: String,
     seed: Option<u64>,

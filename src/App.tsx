@@ -411,6 +411,7 @@ function App() {
             progressUnit={isMultiTable ? "テーブル" : "行"}
             error={error}
             isMultiTable={isMultiTable}
+            totalRows={totalRows}
           />
           {successPath && (
             <p className="rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">

@@ -25,6 +25,13 @@ const iconButtonClass =
 
 const GROUPS = [...new Set(COLUMN_TYPES.map((t) => t.group))];
 
+// これらの型は仕組み上すでに値が絶対に重複しないため、「重複しない値にする」チェックボックスの
+// 代わりに理由を一言添える(dummy_data_gen側のunique_capacityもこの2型には対応していない)
+const ALWAYS_UNIQUE_REASONS: Partial<Record<string, string>> = {
+  sequence: "連番のため常に重複しません",
+  email: "user{連番}@ドメインの形式のため常に重複しません",
+};
+
 export function ColumnRow({
   column,
   onChange,
@@ -120,8 +127,8 @@ export function ColumnRow({
             onChange={(e) => onChange({ ...column, null_rate: Number(e.target.value) })}
           />
         </label>
-        {column.type === "sequence" ? (
-          <span className="text-slate-400 dark:text-slate-500">連番のため常に重複しません</span>
+        {ALWAYS_UNIQUE_REASONS[column.type] ? (
+          <span className="text-slate-400 dark:text-slate-500">{ALWAYS_UNIQUE_REASONS[column.type]}</span>
         ) : (
           <label className="flex items-center gap-1.5 cursor-pointer">
             <input

@@ -16,6 +16,9 @@ dist-ssr
 /src-tauri/target
 /src-tauri/gen/schemas
 
+# Rust(src-server、ブラウザ版用HTTPサーバー)のビルド生成物
+/src-server/target
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

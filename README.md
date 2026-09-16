@@ -1,6 +1,6 @@
 # DummyGen JP
 
-日本語特化のダミーデータ(CSV/SQL)を、画面から直感的に設定して生成するオフラインのデスクトップアプリ。
+日本語特化のダミーデータ(CSV/SQL)を、画面から直感的に設定して生成するオフラインのデスクトップアプリ。Tauriデスクトップ版に加えて、社内サーバーとして起動し普通のブラウザからも使える「ブラウザ版」がある(後述)。
 
 生成ロジックは `C:\dev_2\dummy_data_gen`（Rust製CLIツール）を `path` 依存のライブラリとして再利用しており、このリポジトリは主に画面(GUI)部分を持つ。列タイプの生成ルールや氏名・住所などの辞書データを変更したい場合は、こちらではなく `dummy_data_gen` 側（`src/lib.rs`）を直す。
 
@@ -25,6 +25,27 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
+## ブラウザ版(社内サーバー)の使い方
+
+Tauriデスクトップアプリとは別に、`src-server`に軽量なHTTPサーバー(Rust製、`axum`使用)がある。これを起動しておけば、社内の別のPCからも普通のブラウザ(Chrome等)で`http://<起動したPCのIPまたはPC名>:3000`にアクセスして同じ画面・機能を使える。
+
+```bash
+pnpm build            # 画面をビルドする(distフォルダができる。画面を変更したら都度実行し直す)
+cd src-server
+cargo run --release   # サーバーを起動する(既定でポート3000)
+```
+
+起動後、同じPCなら`http://localhost:3000`、社内の別PCからは起動したPCのIPアドレスまたはPC名を使ってアクセスする。ポート番号は環境変数`PORT`で、画面の配信フォルダは`DUMMYGEN_DIST_DIR`で変更できる。他のPCからアクセスできない場合は、Windowsのファイアウォールでこのポートへの受信を許可する必要がある場合がある。
+
+デスクトップ版との違い:
+
+- 生成したファイルの保存先ダイアログは無く、代わりにブラウザの「ダウンロード」機能でファイルを受け取る
+- 複数テーブル(外部キー)構成でCSVを出力するときは、テーブルごとのファイルをまとめたzipファイルとしてダウンロードされる(SQLは今まで通り1ファイル)
+- schema.yamlの読み込みは、ネイティブダイアログの代わりに「ファイルを選択」ボタン(`<input type="file">`)を使う
+- 生成中の細かい進捗(行数)は表示されない(スピナーのみ)。Tauri版が使っている進捗イベントの仕組みがブラウザの通常のHTTP通信では使えないため
+
+開発中に画面を変更しながらブラウザ版の動きを確認したい場合は、`src-server`を`cargo run`で起動したまま別ターミナルで`pnpm dev`を起動し、`http://localhost:1430`を開く(`vite.config.ts`の`server.proxy`設定で`/api`宛のリクエストだけ`src-server`へ転送される。`pnpm build`し直さなくても画面の変更がすぐ反映される)。
+
 ## 画面の構成
 
 - `src/TableTabs.tsx`: テーブルの一覧をタブのように表示し、テーブルの追加・削除・名前変更を行う(複数テーブル/外部キー対応)。画面は常に「テーブルの一覧」として扱い、今まで通りの1テーブルだけの使い方は「テーブルが1個だけの状態」として同じ画面構成になる
@@ -32,12 +53,13 @@ pnpm tauri build
 - `src/ExportPanel.tsx`: 出力フォーマット(CSV/SQL)・文字コード(UTF-8/Shift-JIS)・CSVの値をダブルクォートで囲むオプション(複数テーブルのときは非対応のため非表示)・生成ボタン。生成件数・テーブル名はテーブルごとの設定になったため、ここではなく各テーブルの画面(`TableTabs`のタブ名・カラム設定欄の生成件数欄)で設定する
 - `src/PreviewTable.tsx`: 選択中のテーブルについて、列設定に応じた先頭数件のサンプルをその場で表示するリアルタイムプレビュー(表示件数を5/10/20/50件から選べる)
 - `src/SampleCsvImport.tsx`: 手元のサンプルCSVを読み込み、1行目を列名・各列の値を選択肢(`choices`)の候補として選択中のテーブルのカラム設定に反映する。UTF-8として読めない場合は自動的にShift-JISとして読み直す(`readCsvText`)
-- `src/SchemaYamlPanel.tsx`: テーブル一覧を、`dummy_data_gen`(CLI)と互換の`schema.yaml`として書き出し/読み込みする。テーブルが1個なら単一テーブル形式、2個以上なら`tables:`形式になる。読み込んだ列タイプがこのGUIの`COLUMN_TYPES`に無い場合は読み込みを中止しエラー表示する
+- `src/SchemaYamlPanel.tsx`: テーブル一覧を、`dummy_data_gen`(CLI)と互換の`schema.yaml`として書き出し/読み込みする。テーブルが1個なら単一テーブル形式、2個以上なら`tables:`形式になる。読み込んだ列タイプがこのGUIの`COLUMN_TYPES`に無い場合は読み込みを中止しエラー表示する。読み込みボタンはTauriではネイティブダイアログ、ブラウザでは`<input type="file">`(`SampleCsvImport.tsx`と同じ形)に切り替わる
 - `src/TemplatePicker.tsx` / `templates.ts`: ワンクリックで列構成一式をセットするテンプレート(ユーザー基本情報/EC注文データ/店舗・拠点データ)。選択すると、テーブル一覧をそのテンプレート1個だけの状態に置き換える
 - `src/SavedConfigsPanel.tsx` / `savedConfigs.ts`: テーブル一覧+エクスポート設定一式に名前を付けてlocalStorageに保存し、プルダウンから読み込み・削除する。起動時に前回の状態を自動復元する。複数テーブル対応前の保存データ(テーブル1個・`columns`直持ちの旧形式)は`migrateAppState`が自動的に新形式へ変換して読み込む(データが消えたり壊れたりしない)
 - `src/csvParse.ts`: RFC4180準拠の簡易CSVパーサ(`SampleCsvImport`専用)
 - `src/ProgressBar.tsx`: 生成中の進捗表示。単一テーブルは行数、複数テーブルはテーブル数を単位にする(`unit`プロパティ)
-- `src/useDummyGen.ts`: Tauriコマンド呼び出し(単一テーブル用の`pick_save_path`/`generate_dummy_data`/`preview_dummy_data`、複数テーブル用の`generate_dummy_data_multi`/`preview_dummy_data_multi`、YAML用の`export_schema_yaml`/`import_schema_yaml`)と進捗イベント購読をまとめたフック
+- `src/useDummyGen.ts`: Tauriコマンド呼び出し(単一テーブル用の`pick_save_path`/`generate_dummy_data`/`preview_dummy_data`、複数テーブル用の`generate_dummy_data_multi`/`preview_dummy_data_multi`、YAML用の`export_schema_yaml`/`import_schema_yaml`)と進捗イベント購読をまとめたフック。ブラウザ(Tauriの外)で動いているときは、同じ関数の中で`src-server`の`/api/...`への`fetch`に自動的に切り替わる(呼び出し側のApp.tsxは分岐を意識しない)
+- `src/runtimeEnv.ts`: 今の画面がTauriアプリの中で動いているか(`isTauriRuntime`、`window.__TAURI_INTERNALS__`の有無で判定)、ブラウザから受け取ったファイルをダウンロードさせる処理(`downloadBlob`)
 - `src/types.ts`: `dummy_data_gen`側の`ColumnType`と対応するTypeScript側の型定義。**`dummy_data_gen`に列タイプを追加・変更したときは、必ずこのファイルの`COLUMN_TYPES`も手動で更新すること**(自動生成ではない)。`TableConfig`が画面上の「テーブル1個分」の単位(`id`はGUI内部のタブ識別専用でRust側には送らない)
 
 ## Rust側(src-tauri)
@@ -48,6 +70,15 @@ pnpm tauri build
 - `export_schema_yaml`/`import_schema_yaml`: テーブル一覧を、`dummy_data_gen::schema_file_to_yaml`/`load_schema`を使って`schema.yaml`として保存/読み込みするネイティブダイアログ
 - 出力する文字コードがUTF-8のときは、Excel(日本語版)がBOM無しUTF-8のCSVをShift-JISと誤認して文字化けするのを防ぐため、ファイル先頭にUTF-8のBOMを付けている(単一テーブルのCSV出力のみ。複数テーブルのCSV/JSON出力は`dummy_data_gen`側の`write_output_multi_table`をそのまま使うためBOMは付かない)
 - CSV出力は`GenerateRequest.quote_all`が`true`のとき全ての値をダブルクォートで囲む(`dummy_data_gen::write_csv_streaming`の`quote_all`引数にそのまま渡すだけ。単一テーブルのみ)
+
+## Rust側(src-server、ブラウザ版)
+
+`src-tauri`とは別の独立したCargoプロジェクト(`dummy_data_gen`を同じように`path`依存で参照)。`dummy_data_gen`自体は一切変更していない(既存の公開関数をそのまま呼ぶだけで済んだため)。
+
+- `/api/preview`・`/api/preview_multi`: `src-tauri`の`preview_dummy_data`・`preview_dummy_data_multi`と同じ処理をHTTPハンドラにしたもの
+- `/api/generate`・`/api/generate_multi`: 生成結果をサーバー側の一時フォルダに書き出し、その中身をそのままレスポンス(ダウンロード)として返す。複数テーブルでファイルが2個以上できる場合(CSV)は`zip`クレートでまとめる。生成処理は重いため`tokio::task::spawn_blocking`で実行し、他のリクエストを受け付けられなくなるのを防いでいる
+- `/api/export_schema_yaml`・`/api/import_schema_yaml`: `schema_file_to_yaml`・`load_schema`を使う点は`src-tauri`と同じ。`import_schema_yaml`はネイティブダイアログが無いため、ブラウザから送られてきたYAMLのテキストをそのまま受け取り、一時ファイルに書き出してから`load_schema`(パス指定必須)に渡している
+- 静的ファイル配信(`tower_http::services::ServeDir`)で`dummygen_jp_gui/dist`(`pnpm build`の出力)を配信し、`/api/...`以外の全てのパスをそこにフォールバックする
 
 ## Tauriの設定で注意した点
 

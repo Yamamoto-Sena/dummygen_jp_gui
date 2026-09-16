@@ -10,12 +10,14 @@ import { TableTabs } from "./TableTabs";
 import { TemplatePicker } from "./TemplatePicker";
 import type { Template } from "./templates";
 import { useDummyGen } from "./useDummyGen";
+import { isTauriRuntime } from "./runtimeEnv";
 import {
   COLUMN_TYPES,
   makeTableId,
   newColumn,
   type OutputEncoding,
   type PreviewResult,
+  type SchemaFileResult,
   type SchemaInput,
   type TableConfig,
 } from "./types";
@@ -65,6 +67,7 @@ function App() {
     previewMulti: fetchPreviewMulti,
     exportSchemaYaml,
     importSchemaYaml,
+    importSchemaYamlFromFile,
     progress,
     isGenerating,
     error,
@@ -198,7 +201,14 @@ function App() {
       const request: SchemaInput[] = tables.map((t) => ({ row_count: t.rowCount, table_name: t.name, columns: t.columns }));
       ok = await generateMulti(request, format, encoding, outputPath);
     }
-    if (ok) setSuccessPath(outputPath);
+    if (ok) {
+      // ブラウザ版の複数テーブルは、実際にダウンロードされるファイル名がoutputPathと異なる
+      // (SQLは1ファイルだがCSVは2個以上のファイルをzipにまとめる。src-server/src/main.rsの
+      // generate_multiと同じ判定)。Tauri版・単一テーブルはoutputPathがそのまま実際の名前
+      const downloadedName =
+        isMultiTable && !isTauriRuntime() ? (format === "sql" ? "output.sql" : "output.zip") : outputPath;
+      setSuccessPath(downloadedName);
+    }
   };
 
   const handleSelectTemplate = (template: Template) => {
@@ -234,40 +244,57 @@ function App() {
     try {
       const request: SchemaInput[] = tables.map((t) => ({ row_count: t.rowCount, table_name: t.name, columns: t.columns }));
       const path = await exportSchemaYaml(request);
-      if (path) window.alert(`schema.yamlとして保存しました:\n${path}`);
+      if (path) {
+        window.alert(isTauriRuntime() ? `schema.yamlとして保存しました:\n${path}` : "schema.yamlとしてダウンロードしました");
+      }
     } catch (e) {
       window.alert(`保存に失敗しました: ${String(e)}`);
     }
   };
 
+  // schema.yaml読み込み後の共通処理(Tauri経由・ブラウザ経由のどちらからも呼ぶ)。
+  // このGUIが対応していない列タイプが含まれていたら、中途半端に取り込まず中止する
+  const applyImportedSchema = (result: SchemaFileResult) => {
+    const unknownTypes = new Set<string>();
+    for (const t of result.tables) {
+      for (const c of t.columns) {
+        if (!COLUMN_TYPES.some((ct) => ct.id === c.type)) unknownTypes.add(c.type);
+      }
+    }
+    if (unknownTypes.size > 0) {
+      window.alert(
+        `読み込みを中止しました。このGUIが対応していない列タイプが含まれています: ${[...unknownTypes].join(", ")}`,
+      );
+      return;
+    }
+
+    const newTables: TableConfig[] = result.tables.map((t) => ({
+      id: makeTableId(),
+      name: t.table_name ?? "table1",
+      rowCount: t.row_count,
+      columns: t.columns,
+    }));
+    setTables(newTables);
+    setActiveTableId(newTables[0].id);
+    setSuccessPath(null);
+  };
+
+  // Tauri版: ネイティブダイアログでschema.yamlを選ぶ
   const handleImportSchema = async () => {
     try {
       const result = await importSchemaYaml();
       if (!result) return; // ダイアログでキャンセルされた
+      applyImportedSchema(result);
+    } catch (e) {
+      window.alert(`読み込みに失敗しました: ${String(e)}`);
+    }
+  };
 
-      // このGUIが対応していない列タイプが含まれていたら、中途半端に取り込まず中止する
-      const unknownTypes = new Set<string>();
-      for (const t of result.tables) {
-        for (const c of t.columns) {
-          if (!COLUMN_TYPES.some((ct) => ct.id === c.type)) unknownTypes.add(c.type);
-        }
-      }
-      if (unknownTypes.size > 0) {
-        window.alert(
-          `読み込みを中止しました。このGUIが対応していない列タイプが含まれています: ${[...unknownTypes].join(", ")}`,
-        );
-        return;
-      }
-
-      const newTables: TableConfig[] = result.tables.map((t) => ({
-        id: makeTableId(),
-        name: t.table_name ?? "table1",
-        rowCount: t.row_count,
-        columns: t.columns,
-      }));
-      setTables(newTables);
-      setActiveTableId(newTables[0].id);
-      setSuccessPath(null);
+  // ブラウザ版: <input type="file">で選ばれたファイルを読み込む
+  const handleImportSchemaFile = async (file: File) => {
+    try {
+      const result = await importSchemaYamlFromFile(file);
+      applyImportedSchema(result);
     } catch (e) {
       window.alert(`読み込みに失敗しました: ${String(e)}`);
     }
@@ -332,7 +359,11 @@ function App() {
             onLoad={handleLoadConfig}
             onDelete={handleDeleteConfig}
           />
-          <SchemaYamlPanel onExport={handleExportSchema} onImport={handleImportSchema} />
+          <SchemaYamlPanel
+            onExport={handleExportSchema}
+            onImport={handleImportSchema}
+            onImportFile={handleImportSchemaFile}
+          />
           <ColumnEditor columns={activeTable.columns} onChange={setActiveColumns} otherTables={otherTables} />
         </section>
 
@@ -360,7 +391,9 @@ function App() {
           />
           {successPath && (
             <p className="rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
-              {totalRows.toLocaleString()}行のデータを {successPath} に書き出しました
+              {isTauriRuntime()
+                ? `${totalRows.toLocaleString()}行のデータを ${successPath} に書き出しました`
+                : `${totalRows.toLocaleString()}行のデータを ${successPath} としてダウンロードしました`}
             </p>
           )}
         </section>

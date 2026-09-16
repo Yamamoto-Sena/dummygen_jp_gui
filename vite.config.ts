@@ -27,7 +27,15 @@ export default defineConfig(() => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/src-server/**"],
+    },
+    // ブラウザ版(src-server、既定ポート3000)の動作を`pnpm dev`のまま確認できるように、
+    // /api宛のリクエストだけそちらへ転送する。Tauriは/apiを呼ばないため影響しない
+    proxy: {
+      "/api": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+      },
     },
   },
 }));

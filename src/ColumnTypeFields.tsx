@@ -47,6 +47,19 @@ export function ColumnTypeFields({ column, onChange, otherTables }: Props) {
         </label>
       );
 
+    case "katakana_name":
+    case "katakana_name_hankaku":
+      return (
+        <label className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={column.with_space ?? false}
+            onChange={(e) => set("with_space", e.target.checked)}
+          />
+          姓の読みと名の読みの間にスペースを入れる(例:ヤマダ タロウ)
+        </label>
+      );
+
     case "integer":
     case "float":
       return (

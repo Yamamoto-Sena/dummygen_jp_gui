@@ -125,7 +125,7 @@ export interface ColumnConfig {
   weights?: number[];
   // fixed
   value?: string;
-  // name_ja
+  // name_ja / katakana_name / katakana_name_hankaku
   with_space?: boolean;
   // foreign_key。"テーブル名.列名"の形式(例: "users.id")
   references?: string;

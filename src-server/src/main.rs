@@ -208,9 +208,13 @@ fn run_generate(request: GenerateRequestWeb, output_path: &str) -> Result<(), Ap
     let base_seed = request.seed.unwrap_or_else(rand::random);
     resolve_unique_pools(&mut columns, schema.row_count, base_seed);
 
+    // formatは未対応の値が来たら下のmatchで明示的にエラーにしているのに対し、
+    // encodingはこれまで未対応の値を黙ってUtf8として扱っていた(dummygen_jp_gui/src-tauri/src/lib.rsの
+    // 単一テーブル版と同じ不整合)。formatと揃えて、こちらも未対応の値は明示的にエラーにする
     let encoding = match request.encoding.as_str() {
+        "utf8" => Encoding::Utf8,
         "sjis" => Encoding::Sjis,
-        _ => Encoding::Utf8,
+        other => return Err(bad_request(format!("未対応の文字コードです: {other}"))),
     };
 
     let result = match request.format.as_str() {
@@ -316,8 +320,9 @@ fn run_generate_multi(request: GenerateRequestMultiWeb, output_base_path: &str) 
 
     // リクエストの文字列("csv"等)を、Rust側の型(Encoding/Format)に変換する
     let encoding = match request.encoding.as_str() {
+        "utf8" => Encoding::Utf8,
         "sjis" => Encoding::Sjis,
-        _ => Encoding::Utf8,
+        other => return Err(bad_request(format!("複数テーブルでは未対応の文字コードです: {other}"))),
     };
     let format = match request.format.as_str() {
         "csv" => Format::Csv,

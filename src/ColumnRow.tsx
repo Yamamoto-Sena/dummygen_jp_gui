@@ -127,7 +127,14 @@ export function ColumnRow({
             step={0.1}
             className={`${inputClass} w-20 shrink-0 !w-20`}
             value={column.null_rate ?? 0}
-            onChange={(e) => onChange({ ...column, null_rate: Number(e.target.value) })}
+            onChange={(e) => {
+              // min/max属性は上下ボタンにしか効かず、キーボード入力そのものは制限しない
+              // (App.tsxの生成件数の欄と同じ理由)。ここでも0〜1の範囲外を打ち込めないよう、
+              // 入力のたびに0〜1に収める(1を超える・負の値になる・空欄でNaNになる、をここで防ぐ)
+              const raw = Number(e.target.value);
+              const clamped = Number.isNaN(raw) ? 0 : Math.min(1, Math.max(0, raw));
+              onChange({ ...column, null_rate: clamped });
+            }}
           />
         </label>
         {/* ?と:を使った三項演算子(条件分岐)。ALWAYS_UNIQUE_REASONSに理由の文字列があれば

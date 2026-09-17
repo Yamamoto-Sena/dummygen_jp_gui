@@ -35,11 +35,29 @@ const SAVED_CONFIGS_KEY = "dummygen_jp_saved_configs";
 // 読み出した直後のJSONは中身が保証されていない(誰かが手で書き換えているかもしれない)ため。
 // "as 型"は「この値をその型として扱ってよい」とTypeScriptに伝えるキャストで、
 // 実行時のチェック(Array.isArray等)と組み合わせて安全性を確保している
+
+// tablesの中身が本当にTableConfigの形をしているか(id/name/rowCount/columnsを
+// 正しい型で持っているか)を確認する。localStorageの中身はブラウザの開発者ツール等で
+// 誰でも書き換えられる(=中身が保証されていない)ため、「tables配列があるから新形式」
+// と決めつけて中身をそのまま信用すると、壊れたデータのときに読み込んだ直後ではなく
+// 画面のどこかで(例: columnsが無くて.mapが失敗する、といった形で)突然エラーになる
+function isValidTableConfig(t: unknown): t is TableConfig {
+  if (!t || typeof t !== "object") return false;
+  const table = t as Record<string, unknown>;
+  return (
+    typeof table.id === "string" &&
+    typeof table.name === "string" &&
+    typeof table.rowCount === "number" &&
+    Array.isArray(table.columns)
+  );
+}
+
 function migrateAppState(raw: unknown): AppState | null {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown>;
 
   if (Array.isArray(obj.tables)) {
+    if (!obj.tables.every(isValidTableConfig)) return null;
     return obj as unknown as AppState;
   }
 

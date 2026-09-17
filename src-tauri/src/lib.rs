@@ -239,9 +239,13 @@ fn generate_dummy_data(app: tauri::AppHandle, request: GenerateRequest) -> Resul
     let base_seed = request.seed.unwrap_or_else(rand::random);
     resolve_unique_pools(&mut columns, schema.row_count, base_seed);
 
+    // formatは未対応の値が来たら下のmatchで明示的にエラーにしているのに対し、
+    // encodingはこれまで未対応の値を黙ってUtf8として扱っていた(誤った値が来ても
+    // 気づけない)。formatと揃えて、こちらも未対応の値は明示的にエラーにする
     let encoding = match request.encoding.as_str() {
+        "utf8" => Encoding::Utf8,
         "sjis" => Encoding::Sjis,
-        _ => Encoding::Utf8,
+        other => return Err(format!("未対応の文字コードです: {other}")),
     };
 
     let app_for_progress = app.clone();
@@ -352,8 +356,9 @@ fn run_generate_multi(
     // フロントエンドから来た文字列("csv"等)を、Rust側の型(Encoding/Format)に変換する。
     // matchで文字列の中身を見て、どれにも当てはまらなければother(その他)としてエラーにする
     let encoding = match encoding {
+        "utf8" => Encoding::Utf8,
         "sjis" => Encoding::Sjis,
-        _ => Encoding::Utf8,
+        other => return Err(format!("複数テーブルでは未対応の文字コードです: {other}")),
     };
     let format = match format {
         "csv" => Format::Csv,
@@ -426,6 +431,36 @@ mod tests {
             ]
         }))
         .unwrap()
+    }
+
+    // 回帰テスト: GUIから直接呼ばれるこの複数テーブル生成の経路は、CLIのschema.yaml読み込み
+    // (normalize_schema_file)を経由しないため、以前はテーブル名が重複していてもここで
+    // 弾かれず、SQL出力で2つの別テーブルが同じテーブル名のINSERT文に混ざったり、外部キーの
+    // 参照先が意図しない方のテーブルにすり替わったりする不具合があった(dummy_data_gen側の
+    // prepare_tablesにテーブル名の検証を追加して修正)
+    #[test]
+    fn run_generate_multi_rejects_duplicate_table_names() {
+        let dir = std::env::temp_dir().join(format!("dummygen_jp_gui_dup_name_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base_path = dir.join("multi_test_out.csv");
+
+        let mut duplicate_users_schema = users_schema();
+        duplicate_users_schema.row_count = 3;
+
+        let err = run_generate_multi(
+            vec![users_schema(), duplicate_users_schema],
+            "csv",
+            "utf8",
+            Some(42),
+            base_path.to_str().unwrap(),
+            false,
+            |_, _| {},
+        )
+        .err()
+        .expect("同じ名前のテーブルが2つあるのにエラーにならなかった");
+        assert!(err.contains("重複しています"), "エラーメッセージ: {}", err);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

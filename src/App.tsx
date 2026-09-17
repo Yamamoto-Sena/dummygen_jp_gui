@@ -14,7 +14,7 @@
 //   - useEffect: 「画面が表示された後」や「特定の値が変わった後」に実行したい処理を書く仕組み。
 //     `useEffect(() => { 処理 }, [依存する値のリスト])`という形で使い、依存する値のリストに
 //     入っている値が変わるたびに処理が再実行される(空配列[]なら「最初の1回だけ」という意味になる)
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dices, Moon, Sun } from "lucide-react";
 import { ColumnEditor } from "./ColumnEditor";
 import { ExportPanel } from "./ExportPanel";
@@ -145,23 +145,41 @@ function App() {
   // テーブル一覧が変わるたびに、少し待ってからサンプルデータを取り直す
   // (連続入力のたびに毎回呼ぶと重くなるため400ms待つ)。
   // テーブルが1個だけなら今まで通りの単一テーブル用プレビュー、2個以上なら
-  // 外部キーの参照関係も含めて解決する複数テーブル用プレビューを使う
+  // 外部キーの参照関係も含めて解決する複数テーブル用プレビューを使う。
+  //
+  // previewRequestIdRefは「今から送るリクエストが何番目か」を数える通し番号。
+  // 通信には時間がかかるため、先に送ったリクエストの応答が後から送ったリクエストの
+  // 応答より遅れて届くことがある(順番が入れ替わる)。番号を比べて「自分より新しい
+  // リクエストが既に始まっている(=自分は古くなった)」場合は、届いた結果を画面に
+  // 反映せずに捨てることで、新しい入力内容に対して古いプレビュー結果が上書き
+  // 表示されてしまうのを防ぐ
+  const previewRequestIdRef = useRef(0);
+
   useEffect(() => {
     if (tables.every((t) => t.columns.length === 0)) {
+      previewRequestIdRef.current += 1; // 進行中のリクエストがあれば古い扱いにする
       setPreviewByTable({});
       setPreviewError(null);
       return;
     }
     const timer = setTimeout(() => {
+      const requestId = ++previewRequestIdRef.current;
       if (tables.length === 1) {
         const t = tables[0];
         const sampleSize = Math.min(previewSize, Math.max(1, t.rowCount));
         fetchPreview(t.columns, sampleSize)
           .then((result) => {
-            setPreviewByTable({ [t.id]: result });
+            if (previewRequestIdRef.current !== requestId) return; // 自分より新しいリクエストが既にある
+            // 単一テーブルの結果だけを差し替える({[t.id]: result}で丸ごと置き換えると、
+            // 複数テーブルへ切り替えた直後にこの応答が遅れて届いた場合、他のテーブル分の
+            // プレビューまで消えてしまうため)
+            setPreviewByTable((prev) => ({ ...prev, [t.id]: result }));
             setPreviewError(null);
           })
-          .catch((e) => setPreviewError(String(e)));
+          .catch((e) => {
+            if (previewRequestIdRef.current !== requestId) return;
+            setPreviewError(String(e));
+          });
       } else {
         const request: SchemaInput[] = tables.map((t) => ({
           row_count: t.rowCount,
@@ -170,6 +188,7 @@ function App() {
         }));
         fetchPreviewMulti(request, previewSize)
           .then((results) => {
+            if (previewRequestIdRef.current !== requestId) return;
             const map: Record<string, PreviewResult> = {};
             tables.forEach((t, i) => {
               map[t.id] = results[i];
@@ -177,7 +196,10 @@ function App() {
             setPreviewByTable(map);
             setPreviewError(null);
           })
-          .catch((e) => setPreviewError(String(e)));
+          .catch((e) => {
+            if (previewRequestIdRef.current !== requestId) return;
+            setPreviewError(String(e));
+          });
       }
     }, PREVIEW_DEBOUNCE_MS);
     return () => clearTimeout(timer);
@@ -202,8 +224,19 @@ function App() {
 
   const setActiveColumns = (columns: typeof activeTable.columns) => updateTable(activeTable.id, (t) => ({ ...t, columns }));
 
+  // 新しいテーブルの初期名(例: "table2")を、今あるテーブルのどれとも被らない名前になるまで
+  // 数字を増やしながら探す。単純に「テーブル数+1」にすると、テーブルを追加→削除→追加、を
+  // 繰り返したときに既存のテーブルと同じ名前が付いてしまう(例: table1,table2を作ってtable1を
+  // 削除すると残りはtable2の1個だけになり、次の追加が「1個+1」=table2になって重複する)
+  const findUnusedTableName = () => {
+    const used = new Set(tables.map((t) => t.name));
+    let n = tables.length + 1;
+    while (used.has(`table${n}`)) n += 1;
+    return `table${n}`;
+  };
+
   const handleAddTable = () => {
-    const newTable: TableConfig = { id: makeTableId(), name: `table${tables.length + 1}`, rowCount: 1000, columns: [] };
+    const newTable: TableConfig = { id: makeTableId(), name: findUnusedTableName(), rowCount: 1000, columns: [] };
     setTables([...tables, newTable]);
     setActiveTableId(newTable.id);
   };
@@ -230,6 +263,12 @@ function App() {
     // some(...)は「配列の中に条件を満たす要素が1つでもあるか」を調べるメソッド。
     // 複数テーブルのときは、名前が空のテーブルが1つでもあれば処理をやめる
     if (isMultiTable && tables.some((t) => t.name.trim() === "")) return;
+    // 複数テーブルで同じ名前が2つ以上あると、SQL出力で別々のテーブルが同じテーブル名の
+    // INSERT文に混ざったり、外部キーの参照先が意図しない方のテーブルにすり替わったりする
+    // (Rust側のprepare_tablesでも検証しているが、ここで先に止めて分かりやすく防ぐ)。
+    // Setは「同じ値を2回以上持てない」集合なので、名前の一覧をSetに入れたときの件数が
+    // テーブルの個数より少なければ、どこかに同じ名前が2つ以上あるということになる
+    if (isMultiTable && new Set(tables.map((t) => t.name.trim())).size !== tables.length) return;
 
     const extension = format;
     const defaultName = format === "sql" ? "output.sql" : format === "xlsx" ? "output.xlsx" : "output.csv";

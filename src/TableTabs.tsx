@@ -18,8 +18,25 @@ export function TableTabs({ tables, activeTableId, onSelect, onAdd, onRemove, on
   // という形で「選ぶ」と「名前を変える」を別の操作にする
   // (以前は名前欄そのものがタブだったため、選ぶつもりで押すと編集になってしまっていた)
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  // 編集中だけ使う「下書き」の名前。編集を始めた時点の名前を控えておき、
+  // Enter/フォーカスを外した時だけ実際の名前(onRename)に反映する。
+  // こうしておくことで、Escapeキーで編集を取り消したときに「編集前の名前のまま」に
+  // 戻せるようになる(以前はonChangeのたびに直接onRenameしていたため、Escapeを押しても
+  // それまでに打った内容がそのまま確定してしまっていた)
+  const [draftName, setDraftName] = useState("");
 
-  const stopRenaming = () => setRenamingId(null);
+  const startRenaming = (t: TableConfig) => {
+    setDraftName(t.name);
+    setRenamingId(t.id);
+  };
+
+  const commitRenaming = () => {
+    if (renamingId) onRename(renamingId, draftName);
+    setRenamingId(null);
+  };
+
+  // 下書きを画面に反映せず(onRenameを呼ばず)編集モードだけ終える=元の名前のまま取り消す
+  const cancelRenaming = () => setRenamingId(null);
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -39,11 +56,12 @@ export function TableTabs({ tables, activeTableId, onSelect, onAdd, onRemove, on
               <input
                 type="text"
                 autoFocus
-                value={t.name}
-                onChange={(e) => onRename(t.id, e.target.value)}
-                onBlur={stopRenaming}
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                onBlur={commitRenaming}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === "Escape") stopRenaming();
+                  if (e.key === "Enter") commitRenaming();
+                  if (e.key === "Escape") cancelRenaming();
                 }}
                 className="w-24 bg-transparent focus:outline-none"
                 placeholder="テーブル名"
@@ -52,7 +70,7 @@ export function TableTabs({ tables, activeTableId, onSelect, onAdd, onRemove, on
               <button
                 type="button"
                 onClick={() => onSelect(t.id)}
-                onDoubleClick={() => setRenamingId(t.id)}
+                onDoubleClick={() => startRenaming(t)}
                 className="cursor-pointer"
                 title="クリックで選択、ダブルクリックで名前を変更"
               >
@@ -62,7 +80,7 @@ export function TableTabs({ tables, activeTableId, onSelect, onAdd, onRemove, on
             {active && !isRenaming && (
               <button
                 type="button"
-                onClick={() => setRenamingId(t.id)}
+                onClick={() => startRenaming(t)}
                 title="名前を変更"
                 className="rounded p-0.5 text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white transition cursor-pointer"
               >

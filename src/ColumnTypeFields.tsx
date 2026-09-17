@@ -175,8 +175,11 @@ export function ColumnTypeFields({ column, onChange, otherTables }: Props) {
         set("choices", next);
       };
       const setWeightAt = (i: number, value: number) => {
+        // min={0}属性はキーボード入力を止めないため、負の値やNaN(空欄)をそのまま
+        // 打ち込めてしまう(App.tsxの生成件数の欄と同じ理由)。負の重みはRust側の
+        // 検証で弾かれるだけで無意味なので、ここで0未満にならないようにしておく
         const next = [...weights];
-        next[i] = value;
+        next[i] = Number.isNaN(value) ? 0 : Math.max(0, value);
         set("weights", next);
       };
       // choicesとweightsは必ずセットで変わるため、set()を2回連続で呼ぶと

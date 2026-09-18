@@ -2,7 +2,7 @@
 // switch文で出し分けるコンポーネント。「型を選んだら、その型に必要な入力欄だけが増える」画面の
 // 中心部分にあたる
 import { Plus, Trash2 } from "lucide-react";
-import type { ColumnConfig, DateFormat } from "./types";
+import { PREFECTURES, type ColumnConfig, type DateFormat } from "./types";
 
 // interfaceは「このコンポーネントがどんなprops(親から受け取る値)を必要とするか」を
 // TypeScriptに教えるための型定義。?が付いているotherTablesは「無くてもよい(省略可能)」という意味
@@ -162,6 +162,61 @@ export function ColumnTypeFields({ column, onChange, otherTables }: Props) {
           />
         </label>
       );
+
+    // 都道府県を絞り込みたいときだけallowed_prefecturesに配列を持たせる。
+    // undefined(未選択)のままなら今まで通り47都道府県すべてが対象になる
+    case "prefecture_ja":
+    case "address_ja": {
+      const allowed = column.allowed_prefectures;
+      const isRestricted = allowed !== undefined;
+      const isChecked = (pref: string) => !isRestricted || allowed.includes(pref);
+
+      const toggle = (pref: string, checked: boolean) => {
+        // 「未選択=全47都道府県」の状態から1件だけ外す/戻すときは、まず47件を
+        // ベースの配列として展開してから、その1件だけ足し引きする
+        const base = allowed ?? [...PREFECTURES];
+        const next = checked ? [...base, pref] : base.filter((p) => p !== pref);
+        set("allowed_prefectures", next);
+      };
+
+      return (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className={labelClass}>絞り込む都道府県(未選択なら全47都道府県)</span>
+            <div className="flex shrink-0 gap-2">
+              <button
+                type="button"
+                onClick={() => set("allowed_prefectures", undefined)}
+                className="text-xs text-cyan-600 dark:text-cyan-400 hover:underline cursor-pointer"
+              >
+                すべて選択
+              </button>
+              <button
+                type="button"
+                onClick={() => set("allowed_prefectures", [])}
+                className="text-xs text-cyan-600 dark:text-cyan-400 hover:underline cursor-pointer"
+              >
+                すべて解除
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-2 gap-y-1 max-h-48 overflow-y-auto rounded-md border border-slate-300 dark:border-slate-700 p-2">
+            {PREFECTURES.map((pref) => (
+              <label
+                key={pref}
+                className="flex items-center gap-1 text-xs text-slate-700 dark:text-slate-200 cursor-pointer"
+              >
+                <input type="checkbox" checked={isChecked(pref)} onChange={(e) => toggle(pref, e.target.checked)} />
+                {pref}
+              </label>
+            ))}
+          </div>
+          {isRestricted && allowed.length === 0 && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">1つ以上の都道府県を選択してください。</p>
+          )}
+        </div>
+      );
+    }
 
     case "enum": {
       const choices = column.choices ?? [];

@@ -4,6 +4,19 @@
 
 export type DateFormat = "ymd" | "iso8601" | "slash" | "wareki";
 
+// 47都道府県の名前一覧(Rust側のCITIES_BY_PREFECTUREと同じ並び順=北海道→沖縄県)。
+// prefecture_ja / address_ja の「都道府県を絞り込む」チェックボックス一覧の元データ。
+// Rust側と同様、都道府県名が変わることは実質無いため手動で同期させている
+export const PREFECTURES: string[] = [
+  "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
+  "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
+  "新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県", "岐阜県",
+  "静岡県", "愛知県", "三重県", "滋賀県", "京都府", "大阪府", "兵庫県",
+  "奈良県", "和歌山県", "鳥取県", "島根県", "岡山県", "広島県", "山口県",
+  "徳島県", "香川県", "愛媛県", "高知県", "福岡県", "佐賀県", "長崎県",
+  "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県",
+];
+
 export interface ColumnTypeMeta {
   id: string;
   label: string;
@@ -127,6 +140,9 @@ export interface ColumnConfig {
   value?: string;
   // name_ja / katakana_name / katakana_name_hankaku
   with_space?: boolean;
+  // prefecture_ja / address_ja。指定した都道府県名だけに絞り込む(例: ["東京都", "大阪府"])。
+  // 未指定(undefined)のときは今まで通り47都道府県すべてが対象
+  allowed_prefectures?: string[];
   // foreign_key。"テーブル名.列名"の形式(例: "users.id")
   references?: string;
   // pattern。正規表現に似た簡易パターン(例: "[A-Z]{3}-[0-9]{4}")

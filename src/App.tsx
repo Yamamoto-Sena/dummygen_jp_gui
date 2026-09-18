@@ -406,7 +406,10 @@ function App() {
     const newTables: TableConfig[] = result.tables.map((t) => ({
       id: makeTableId(),
       name: t.table_name ?? "table1",
-      rowCount: t.row_count,
+      // 生成件数の入力欄は手入力のときだけclampRowCountで上限(1,000,000)を強制しており、
+      // YAML読み込み経路はこれまで素通りしていた(手書きのschema.yamlに極端な値が
+      // 書かれていると、そのまま生成に進んで内部でエラーになるまで気づけなかった)
+      rowCount: clampRowCount(t.row_count),
       columns: t.columns,
     }));
     setTables(newTables);

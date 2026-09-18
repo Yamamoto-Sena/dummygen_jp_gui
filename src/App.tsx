@@ -84,6 +84,7 @@ function App() {
   const [previewSize, setPreviewSize] = useState(DEFAULT_PREVIEW_SAMPLE_SIZE); // プレビューの表示件数
   const [previewByTable, setPreviewByTable] = useState<Record<string, PreviewResult>>({}); // テーブルidごとのプレビュー結果
   const [previewError, setPreviewError] = useState<string | null>(null); // プレビュー取得に失敗したときのメッセージ
+  const [validationError, setValidationError] = useState<string | null>(null); // 生成前チェックで引っかかったときのメッセージ
   const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>([]); // 保存済み設定の一覧
   const [toolsMenuOpen, setToolsMenuOpen] = useState(false); // 「メニュー」ボタンの開閉状態
 
@@ -159,6 +160,19 @@ function App() {
     if (tables.every((t) => t.columns.length === 0)) {
       previewRequestIdRef.current += 1; // 進行中のリクエストがあれば古い扱いにする
       setPreviewByTable({});
+      setPreviewError(null);
+      return;
+    }
+    // テーブル名を編集している途中で、他のテーブルと同じ名前・空の名前になっている
+    // 瞬間がある。ここでRust側に問い合わせるとその生のエラー文がそのままプレビュー欄に
+    // 出てしまう(生成ボタン側にはhandleGenerateの事前チェックがあるが、こちらは
+    // 入力のたびに自動で呼ばれるため、入力途中の状態でも起きる)。名前を確定させる前の
+    // 一時的な状態なので、ここでは通信自体をスキップして何も表示しない
+    const hasInvalidTableName =
+      tables.length > 1 &&
+      (tables.some((t) => t.name.trim() === "") || new Set(tables.map((t) => t.name.trim())).size !== tables.length);
+    if (hasInvalidTableName) {
+      previewRequestIdRef.current += 1;
       setPreviewError(null);
       return;
     }
@@ -256,19 +270,32 @@ function App() {
   //   3. テーブルが1個か2個以上かで、単一テーブル用/複数テーブル用のどちらの生成関数を呼ぶか分ける
   const handleGenerate = async () => {
     setSuccessPath(null);
+    setValidationError(null);
     // every(...)は「配列の全要素が条件を満たすか」を調べるメソッド。
     // 「どのテーブルも列が1つも無い」なら生成しても意味が無いので、ここで処理をやめる(return)
-    if (tables.every((t) => t.columns.length === 0)) return;
-    if (format === "sql" && tables.length === 1 && activeTable.name.trim() === "") return;
+    if (tables.every((t) => t.columns.length === 0)) {
+      setValidationError("列を1つ以上追加してください");
+      return;
+    }
+    if (format === "sql" && tables.length === 1 && activeTable.name.trim() === "") {
+      setValidationError("SQL出力にはテーブル名が必要です");
+      return;
+    }
     // some(...)は「配列の中に条件を満たす要素が1つでもあるか」を調べるメソッド。
     // 複数テーブルのときは、名前が空のテーブルが1つでもあれば処理をやめる
-    if (isMultiTable && tables.some((t) => t.name.trim() === "")) return;
+    if (isMultiTable && tables.some((t) => t.name.trim() === "")) {
+      setValidationError("すべてのテーブルに名前を指定してください");
+      return;
+    }
     // 複数テーブルで同じ名前が2つ以上あると、SQL出力で別々のテーブルが同じテーブル名の
     // INSERT文に混ざったり、外部キーの参照先が意図しない方のテーブルにすり替わったりする
     // (Rust側のprepare_tablesでも検証しているが、ここで先に止めて分かりやすく防ぐ)。
     // Setは「同じ値を2回以上持てない」集合なので、名前の一覧をSetに入れたときの件数が
     // テーブルの個数より少なければ、どこかに同じ名前が2つ以上あるということになる
-    if (isMultiTable && new Set(tables.map((t) => t.name.trim())).size !== tables.length) return;
+    if (isMultiTable && new Set(tables.map((t) => t.name.trim())).size !== tables.length) {
+      setValidationError("テーブル名が重複しています");
+      return;
+    }
 
     const extension = format;
     const defaultName = format === "sql" ? "output.sql" : format === "xlsx" ? "output.xlsx" : "output.csv";
@@ -507,7 +534,7 @@ function App() {
             isGenerating={isGenerating}
             progress={progress}
             progressUnit={isMultiTable ? "テーブル" : "行"}
-            error={error}
+            error={validationError ?? error}
             totalRows={totalRows}
           />
           {successPath && (

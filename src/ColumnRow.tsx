@@ -1,6 +1,7 @@
 // カラム(列)1個分の設定行。列名・型の選択・(型ごとに変わる)追加設定フォーム(ColumnTypeFieldsに委譲)・
 // NULL率・重複しない値にする(unique)の入力に加えて、上下移動・複製・削除・ドラッグでの並べ替えの
 // ボタンを持つ。1行分の見た目と操作をまとめて担当し、実際の状態(ColumnConfig)は親(ColumnEditor)が持つ
+import { useState } from "react";
 import { ChevronDown, ChevronUp, Copy, GripVertical, Trash2 } from "lucide-react";
 import { COLUMN_TYPES, GROUP_COLORS, newColumn, type ColumnConfig } from "./types";
 import { ColumnTypeFields } from "./ColumnTypeFields";
@@ -52,6 +53,12 @@ export function ColumnRow({
 }: Props) {
   const group = COLUMN_TYPES.find((t) => t.id === column.type)?.group;
   const colors = group ? GROUP_COLORS[group] : undefined;
+
+  // NULL率欄だけの入力中の下書き(生の文字列)。number型のinputはvalueに数値を
+  // 書き戻す作りにすると、"0.05"を1文字ずつ打つ途中の"0."が数値化で"0"に
+  // 丸められて末尾のピリオドごと消えてしまう。入力中はこの下書き文字列をそのまま
+  // 表示し、フォーカスが外れた(onBlur)ときだけ0〜1の範囲に丸めてcolumnへ反映する
+  const [nullRateDraft, setNullRateDraft] = useState<string | null>(null);
 
   return (
     <div
@@ -126,13 +133,15 @@ export function ColumnRow({
             max={1}
             step={0.1}
             className={`${inputClass} w-20 shrink-0 !w-20`}
-            value={column.null_rate ?? 0}
-            onChange={(e) => {
+            value={nullRateDraft ?? (column.null_rate ?? 0)}
+            onChange={(e) => setNullRateDraft(e.target.value)}
+            onBlur={(e) => {
               // min/max属性は上下ボタンにしか効かず、キーボード入力そのものは制限しない
-              // (App.tsxの生成件数の欄と同じ理由)。ここでも0〜1の範囲外を打ち込めないよう、
-              // 入力のたびに0〜1に収める(1を超える・負の値になる・空欄でNaNになる、をここで防ぐ)
+              // (App.tsxの生成件数の欄と同じ理由)。ここで0〜1の範囲外を打ち込めないよう、
+              // フォーカスが外れたときに0〜1へ収める(1を超える・負の値になる・空欄でNaNになる、をここで防ぐ)
               const raw = Number(e.target.value);
               const clamped = Number.isNaN(raw) ? 0 : Math.min(1, Math.max(0, raw));
+              setNullRateDraft(null);
               onChange({ ...column, null_rate: clamped });
             }}
           />

@@ -57,7 +57,10 @@ function migrateAppState(raw: unknown): AppState | null {
   const obj = raw as Record<string, unknown>;
 
   if (Array.isArray(obj.tables)) {
-    if (!obj.tables.every(isValidTableConfig)) return null;
+    // every()は空配列に対して常にtrueを返すため、tables:[]という壊れたデータ
+    // (テーブルが1つも無い状態)を先に弾いておく。空のままだと画面側で
+    // 「先頭のテーブル」を前提にしている箇所(activeTable等)がundefined参照で落ちる
+    if (obj.tables.length === 0 || !obj.tables.every(isValidTableConfig)) return null;
     return obj as unknown as AppState;
   }
 

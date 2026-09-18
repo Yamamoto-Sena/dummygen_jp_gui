@@ -6,10 +6,10 @@
 // YAML入出力: export_schema_yaml/import_schema_yaml)。同じ役割を普通のブラウザ向けに
 // 提供する`src-server`にも、ほぼ同じ処理をHTTPハンドラの形で書いた対応物がある。
 use dummy_data_gen::{
-    generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables, resolve_fk_reprs,
-    resolve_foreign_keys, resolve_unique_pools, schema_file_to_yaml, topological_order, write_csv_streaming,
-    write_output_multi_table, write_sql_streaming, write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable,
-    Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
+    generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables,
+    reject_foreign_key_in_single_table, resolve_fk_reprs, resolve_foreign_keys, resolve_unique_pools,
+    schema_file_to_yaml, topological_order, write_csv_streaming, write_output_multi_table, write_sql_streaming,
+    write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -17,6 +17,25 @@ use tauri_plugin_dialog::DialogExt;
 // プレビューは実際の生成件数を使うと重くなるため、常にこの件数だけ試しに生成する。
 // フロントエンド(App.tsx)のPREVIEW_SAMPLE_SIZEと同じ値に合わせている
 const PREVIEW_SAMPLE_SIZE: u32 = 5;
+
+// dummy_data_gen側で「本来起こらないはずの内部矛盾」(想定外のバグ)によりpanicが
+// 発生しても、アプリ全体を巻き込んでクラッシュさせずエラーメッセージとして返すための安全網。
+// Windows(WebView2)ではTauriのコマンドはネイティブのコールバック境界の中で実行されるため、
+// 中でpanicがそのまま外に漏れるとRustの通常のunwindでは済まず、アプリごと強制終了して
+// しまう(「panic in a function that cannot unwind」)。生成ロジック呼び出し全体を
+// catch_unwindで包み、万一panicしても他のコマンドと同じように普通のエラー表示で済ませる。
+// AssertUnwindSafeを使うのは、ここで捕まえたpanicの後は状態を一切使い続けず
+// 即座にErrへ変換するだけなので、内部状態の一貫性を気にする必要が無いため
+fn catch_panic_as_err<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|payload| {
+        let detail = payload
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "不明な内部エラー".to_string());
+        Err(format!("内部エラーが発生しました(想定外の不具合の可能性があります): {detail}"))
+    })
+}
 
 #[derive(serde::Serialize, Clone)]
 struct GenerationProgress {
@@ -87,16 +106,22 @@ struct PreviewRequestMulti {
 // 文字列でしか返せない決まりのため(map_err(|e| e.to_string())で変換している)
 #[tauri::command]
 fn preview_dummy_data(request: PreviewRequest) -> Result<PreviewResult, String> {
-    // PreparedColumnは列名を外部に公開していないため、渡されたColumnDefから先に控えておく
-    let headers: Vec<String> = request.columns.iter().map(|c| c.name.clone()).collect();
+    catch_panic_as_err(move || {
+        // PreparedColumnは列名を外部に公開していないため、渡されたColumnDefから先に控えておく
+        let headers: Vec<String> = request.columns.iter().map(|c| c.name.clone()).collect();
 
-    let schema = Schema { row_count: request.sample_size, table_name: None, columns: request.columns };
-    let mut columns = prepare_columns(&schema).map_err(|e| e.to_string())?;
-    let seed = rand::random();
-    resolve_unique_pools(&mut columns, schema.row_count, seed);
-    let rows = generate_all_rows(schema.row_count, &columns, seed);
+        let schema = Schema { row_count: request.sample_size, table_name: None, columns: request.columns };
+        let mut columns = prepare_columns(&schema).map_err(|e| e.to_string())?;
+        // ここは単一テーブル専用の経路(prepare_tablesを経由しない)なので、prepare_tables側が
+        // 持っている「foreign_key列は複数テーブル(tables:形式)でしか使えない」検証をここでも行う。
+        // 怠ると、参照先が無いままFKプールが埋まらず、生成時に内部矛盾でpanicする
+        reject_foreign_key_in_single_table(&columns).map_err(|e| e.to_string())?;
+        let seed = rand::random();
+        resolve_unique_pools(&mut columns, schema.row_count, seed);
+        let rows = generate_all_rows(schema.row_count, &columns, seed);
 
-    Ok(PreviewResult { headers, rows })
+        Ok(PreviewResult { headers, rows })
+    })
 }
 
 /// 複数テーブル版のpreview_dummy_data。各テーブルのrow_countをサンプル件数に
@@ -105,47 +130,49 @@ fn preview_dummy_data(request: PreviewRequest) -> Result<PreviewResult, String> 
 /// generate_multi_table_rowsは本番のgenerate_dummy_data_multiと共通)
 #[tauri::command]
 fn preview_dummy_data_multi(request: PreviewRequestMulti) -> Result<Vec<PreviewResult>, String> {
-    // 外側のmapで「テーブルごと」、内側のmapで「そのテーブルの列ごと」に処理する
-    // 二重のmap(二重ループのイテレータ版)。結果はVec<Vec<String>>(テーブルごとの
-    // 列名一覧のリスト)になる
-    let headers_by_table: Vec<Vec<String>> =
-        request.tables.iter().map(|t| t.columns.iter().map(|c| c.name.clone()).collect()).collect();
+    catch_panic_as_err(move || {
+        // 外側のmapで「テーブルごと」、内側のmapで「そのテーブルの列ごと」に処理する
+        // 二重のmap(二重ループのイテレータ版)。結果はVec<Vec<String>>(テーブルごとの
+        // 列名一覧のリスト)になる
+        let headers_by_table: Vec<Vec<String>> =
+            request.tables.iter().map(|t| t.columns.iter().map(|c| c.name.clone()).collect()).collect();
 
-    let sample_size = request.sample_size.unwrap_or(PREVIEW_SAMPLE_SIZE);
-    // 各テーブルのrow_countを、プレビュー用の少ない件数に差し替える。
-    // into_iter()は「一覧の中身の所有権をもらいながら1つずつ取り出す」メソッド(iter()と違い、
-    // 取り出した後は元のrequest.tablesを使えなくなるが、その分値をそのまま使い回せる)。
-    // t.row_count.min(sample_size).max(1)は「sample_sizeとrow_countの小さい方を採用し、
-    // それでも1件は下回らないようにする」計算(row_countが0でもプレビューが空にならないため)
-    let sample_tables: Vec<Schema> = request
-        .tables
-        .into_iter()
-        .map(|mut t| {
-            t.row_count = t.row_count.min(sample_size).max(1);
-            t
-        })
-        .collect();
+        let sample_size = request.sample_size.unwrap_or(PREVIEW_SAMPLE_SIZE);
+        // 各テーブルのrow_countを、プレビュー用の少ない件数に差し替える。
+        // into_iter()は「一覧の中身の所有権をもらいながら1つずつ取り出す」メソッド(iter()と違い、
+        // 取り出した後は元のrequest.tablesを使えなくなるが、その分値をそのまま使い回せる)。
+        // t.row_count.min(sample_size).max(1)は「sample_sizeとrow_countの小さい方を採用し、
+        // それでも1件は下回らないようにする」計算(row_countが0でもプレビューが空にならないため)
+        let sample_tables: Vec<Schema> = request
+            .tables
+            .into_iter()
+            .map(|mut t| {
+                t.row_count = t.row_count.min(sample_size).max(1);
+                t
+            })
+            .collect();
 
-    let schema_file = SchemaFile { tables: sample_tables, multi_table: true };
-    let mut tables = prepare_tables(&schema_file).map_err(|e| e.to_string())?;
-    let (deps, referenced) = resolve_foreign_keys(&mut tables).map_err(|e| e.to_string())?;
-    let order = topological_order(&deps, &tables).map_err(|e| e.to_string())?;
-    resolve_fk_reprs(&mut tables, &order).map_err(|e| e.to_string())?;
+        let schema_file = SchemaFile { tables: sample_tables, multi_table: true };
+        let mut tables = prepare_tables(&schema_file).map_err(|e| e.to_string())?;
+        let (deps, referenced) = resolve_foreign_keys(&mut tables).map_err(|e| e.to_string())?;
+        let order = topological_order(&deps, &tables).map_err(|e| e.to_string())?;
+        resolve_fk_reprs(&mut tables, &order).map_err(|e| e.to_string())?;
 
-    let seed = rand::random();
-    let rows_by_table =
-        generate_multi_table_rows(&mut tables, &order, &referenced, seed, |_, _| {}).map_err(|e| e.to_string())?;
+        let seed = rand::random();
+        let rows_by_table = generate_multi_table_rows(&mut tables, &order, &referenced, seed, |_, _| {})
+            .map_err(|e| e.to_string())?;
 
-    // headers_by_table(テーブルごとの列名一覧)とrows_by_table(テーブルごとの生成結果)を
-    // 組み合わせて、テーブルごとの最終的な結果(PreviewResult)にまとめる。
-    // enumerate()で「0番目、1番目、…」の連番(i)を一緒に取り出し、そのiでrows_by_table
-    // から対応する行データを引く。clone()で複製し、unwrap_or_default()は
-    // 「値がNoneなら、その型の初期値(空のVec)を代わりに使う」という意味
-    Ok(headers_by_table
-        .into_iter()
-        .enumerate()
-        .map(|(i, headers)| PreviewResult { headers, rows: rows_by_table[i].clone().unwrap_or_default() })
-        .collect())
+        // headers_by_table(テーブルごとの列名一覧)とrows_by_table(テーブルごとの生成結果)を
+        // 組み合わせて、テーブルごとの最終的な結果(PreviewResult)にまとめる。
+        // enumerate()で「0番目、1番目、…」の連番(i)を一緒に取り出し、そのiでrows_by_table
+        // から対応する行データを引く。clone()で複製し、unwrap_or_default()は
+        // 「値がNoneなら、その型の初期値(空のVec)を代わりに使う」という意味
+        Ok(headers_by_table
+            .into_iter()
+            .enumerate()
+            .map(|(i, headers)| PreviewResult { headers, rows: rows_by_table[i].clone().unwrap_or_default() })
+            .collect())
+    })
 }
 
 /// ファイルの保存先を選ぶネイティブダイアログを表示する。
@@ -233,73 +260,79 @@ fn import_schema_yaml(app: tauri::AppHandle) -> Result<Option<ImportedSchemaFile
 /// ディスパッチするため、ここで生成に数秒かかってもUIスレッドは固まらない。
 #[tauri::command]
 fn generate_dummy_data(app: tauri::AppHandle, request: GenerateRequest) -> Result<(), String> {
-    let schema = Schema { row_count: request.row_count, table_name: request.table_name, columns: request.columns };
+    catch_panic_as_err(move || {
+        let schema =
+            Schema { row_count: request.row_count, table_name: request.table_name, columns: request.columns };
 
-    let mut columns = prepare_columns(&schema).map_err(|e| e.to_string())?;
-    let base_seed = request.seed.unwrap_or_else(rand::random);
-    resolve_unique_pools(&mut columns, schema.row_count, base_seed);
+        let mut columns = prepare_columns(&schema).map_err(|e| e.to_string())?;
+        // preview_dummy_dataと同じ理由(単一テーブル専用の経路はprepare_tablesを経由しないため、
+        // foreign_key列を弾く検証をここでも行う必要がある)
+        reject_foreign_key_in_single_table(&columns).map_err(|e| e.to_string())?;
+        let base_seed = request.seed.unwrap_or_else(rand::random);
+        resolve_unique_pools(&mut columns, schema.row_count, base_seed);
 
-    // formatは未対応の値が来たら下のmatchで明示的にエラーにしているのに対し、
-    // encodingはこれまで未対応の値を黙ってUtf8として扱っていた(誤った値が来ても
-    // 気づけない)。formatと揃えて、こちらも未対応の値は明示的にエラーにする
-    let encoding = match request.encoding.as_str() {
-        "utf8" => Encoding::Utf8,
-        "sjis" => Encoding::Sjis,
-        other => return Err(format!("未対応の文字コードです: {other}")),
-    };
+        // formatは未対応の値が来たら下のmatchで明示的にエラーにしているのに対し、
+        // encodingはこれまで未対応の値を黙ってUtf8として扱っていた(誤った値が来ても
+        // 気づけない)。formatと揃えて、こちらも未対応の値は明示的にエラーにする
+        let encoding = match request.encoding.as_str() {
+            "utf8" => Encoding::Utf8,
+            "sjis" => Encoding::Sjis,
+            other => return Err(format!("未対応の文字コードです: {other}")),
+        };
 
-    let app_for_progress = app.clone();
-    let on_progress = move |done: u64, total: u64| {
-        let _ = app_for_progress.emit("generation:progress", GenerationProgress { done, total });
-    };
+        let app_for_progress = app.clone();
+        let on_progress = move |done: u64, total: u64| {
+            let _ = app_for_progress.emit("generation:progress", GenerationProgress { done, total });
+        };
 
-    let result = match request.format.as_str() {
-        // write_bom: true — 日本語版Excel等でダブルクリックして開いたときに、UTF-8の
-        // CSVがShift-JISと誤認されて文字化けしないよう、BOMを付けて書き出す
-        // (encodingがsjisのときはwrite_csv_streaming内部で無視されるので指定して問題ない)
-        "csv" => write_csv_streaming(
-            schema.row_count,
-            &columns,
-            base_seed,
-            &request.output_path,
-            encoding,
-            DEFAULT_CHUNK_SIZE,
-            true,
-            request.quote_all,
-            on_progress,
-        ),
-        "sql" => {
-            let table_name =
-                schema.table_name.ok_or_else(|| "SQL出力にはテーブル名の指定が必要です".to_string())?;
-            write_sql_streaming(
+        let result = match request.format.as_str() {
+            // write_bom: true — 日本語版Excel等でダブルクリックして開いたときに、UTF-8の
+            // CSVがShift-JISと誤認されて文字化けしないよう、BOMを付けて書き出す
+            // (encodingがsjisのときはwrite_csv_streaming内部で無視されるので指定して問題ない)
+            "csv" => write_csv_streaming(
                 schema.row_count,
                 &columns,
                 base_seed,
-                &table_name,
                 &request.output_path,
                 encoding,
                 DEFAULT_CHUNK_SIZE,
+                true,
+                request.quote_all,
                 on_progress,
-            )
-        }
-        // xlsxはバイナリ(ZIP)形式のためストリーミング書き込みが無く、CSV/SQLと違い
-        // generate_all_rowsで全行をメモリに載せてから一括で書き出す(--encodingは効かない、
-        // dummy_data_gen側の仕様と同じ)。進捗イベントは逐次発火できないため、完了時に1回だけ送る
-        "xlsx" => {
-            let rows = generate_all_rows(schema.row_count, &columns, base_seed);
-            let result = write_xlsx_from_rows(&columns, &rows, &request.output_path);
-            if result.is_ok() {
-                let _ = app.emit(
-                    "generation:progress",
-                    GenerationProgress { done: schema.row_count as u64, total: schema.row_count as u64 },
-                );
+            ),
+            "sql" => {
+                let table_name =
+                    schema.table_name.ok_or_else(|| "SQL出力にはテーブル名の指定が必要です".to_string())?;
+                write_sql_streaming(
+                    schema.row_count,
+                    &columns,
+                    base_seed,
+                    &table_name,
+                    &request.output_path,
+                    encoding,
+                    DEFAULT_CHUNK_SIZE,
+                    on_progress,
+                )
             }
-            result
-        }
-        other => return Err(format!("未対応の出力形式です: {other}")),
-    };
+            // xlsxはバイナリ(ZIP)形式のためストリーミング書き込みが無く、CSV/SQLと違い
+            // generate_all_rowsで全行をメモリに載せてから一括で書き出す(--encodingは効かない、
+            // dummy_data_gen側の仕様と同じ)。進捗イベントは逐次発火できないため、完了時に1回だけ送る
+            "xlsx" => {
+                let rows = generate_all_rows(schema.row_count, &columns, base_seed);
+                let result = write_xlsx_from_rows(&columns, &rows, &request.output_path);
+                if result.is_ok() {
+                    let _ = app.emit(
+                        "generation:progress",
+                        GenerationProgress { done: schema.row_count as u64, total: schema.row_count as u64 },
+                    );
+                }
+                result
+            }
+            other => return Err(format!("未対応の出力形式です: {other}")),
+        };
 
-    result.map_err(|e| e.to_string())
+        result.map_err(|e| e.to_string())
+    })
 }
 
 /// generate_dummy_data_multiの中身(AppHandleに依存しない部分だけ切り出したもの)。
@@ -315,60 +348,66 @@ fn run_generate_multi(
     quote_all: bool,
     mut on_table_start: impl FnMut(usize, &dummy_data_gen::PreparedTable),
 ) -> Result<(), String> {
-    // ここから先は、複数テーブルのダミーデータを作って保存するまでの一連の手順。
-    // dummy_data_gen(親フォルダのRustライブラリ)側の関数を、決まった順番で呼んでいくだけ
-    //   1. SchemaFileを組み立てる(テーブル一覧をまとめた形にする)
-    //   2. prepare_tables: 各テーブルの列定義を検証し、生成に使える形に変換する
-    //   3. resolve_foreign_keys: 外部キー(他のテーブルの値を参照する列)の依存関係を調べる
-    //   4. topological_order: 親テーブルを先に、子テーブルを後に生成できるよう順番を決める
-    //   5. resolve_fk_reprs: 外部キー列の値の型(数値/文字列など)を確定する
-    //   6. generate_multi_table_rows: 決めた順番通りに、実際の行データを作る
-    //   7. できた行データをファイルに書き出す(この後に続く処理)
-    // map_err(|e| e.to_string())は、各手順が返すエラーを「文字列のエラーメッセージ」に
-    // 変換している(Tauriコマンドは文字列のエラーしか返せない決まりのため)。
-    // ?は「エラーだったら、その場でこの関数自体もエラーとして終わらせる」というRustの構文
-    let schema_file = SchemaFile { tables, multi_table: true };
-    let mut tables = prepare_tables(&schema_file).map_err(|e| e.to_string())?;
-    let (deps, referenced) = resolve_foreign_keys(&mut tables).map_err(|e| e.to_string())?;
-    let order = topological_order(&deps, &tables).map_err(|e| e.to_string())?;
-    resolve_fk_reprs(&mut tables, &order).map_err(|e| e.to_string())?;
+    // 万一dummy_data_gen側の内部矛盾でpanicしても、catch_panic_as_errがアプリ全体の
+    // クラッシュを防ぎ、他のエラーと同じように文字列のエラーとして返す(コメント詳細は
+    // catch_panic_as_err自体を参照)
+    catch_panic_as_err(move || {
+        // ここから先は、複数テーブルのダミーデータを作って保存するまでの一連の手順。
+        // dummy_data_gen(親フォルダのRustライブラリ)側の関数を、決まった順番で呼んでいくだけ
+        //   1. SchemaFileを組み立てる(テーブル一覧をまとめた形にする)
+        //   2. prepare_tables: 各テーブルの列定義を検証し、生成に使える形に変換する
+        //   3. resolve_foreign_keys: 外部キー(他のテーブルの値を参照する列)の依存関係を調べる
+        //   4. topological_order: 親テーブルを先に、子テーブルを後に生成できるよう順番を決める
+        //   5. resolve_fk_reprs: 外部キー列の値の型(数値/文字列など)を確定する
+        //   6. generate_multi_table_rows: 決めた順番通りに、実際の行データを作る
+        //   7. できた行データをファイルに書き出す(この後に続く処理)
+        // map_err(|e| e.to_string())は、各手順が返すエラーを「文字列のエラーメッセージ」に
+        // 変換している(Tauriコマンドは文字列のエラーしか返せない決まりのため)。
+        // ?は「エラーだったら、その場でこの関数自体もエラーとして終わらせる」というRustの構文
+        let schema_file = SchemaFile { tables, multi_table: true };
+        let mut tables = prepare_tables(&schema_file).map_err(|e| e.to_string())?;
+        let (deps, referenced) = resolve_foreign_keys(&mut tables).map_err(|e| e.to_string())?;
+        let order = topological_order(&deps, &tables).map_err(|e| e.to_string())?;
+        resolve_fk_reprs(&mut tables, &order).map_err(|e| e.to_string())?;
 
-    // 乱数シード: 指定があればそれを使い(同じ設定なら毎回同じデータになる)、
-    // 無ければunwrap_or_elseでその場でランダムな値を1回だけ作って使う
-    let base_seed = seed.unwrap_or_else(rand::random);
-    let rows_by_table =
-        generate_multi_table_rows(&mut tables, &order, &referenced, base_seed, |i, t| on_table_start(i, t))
+        // 乱数シード: 指定があればそれを使い(同じ設定なら毎回同じデータになる)、
+        // 無ければunwrap_or_elseでその場でランダムな値を1回だけ作って使う
+        let base_seed = seed.unwrap_or_else(rand::random);
+        let rows_by_table =
+            generate_multi_table_rows(&mut tables, &order, &referenced, base_seed, |i, t| on_table_start(i, t))
+                .map_err(|e| e.to_string())?;
+
+        // 依存順(親→子)に並んでいるorderの各テーブル番号(&i)について、テーブル名・列定義・
+        // 生成済みの行データをひとまとめ(GeneratedTable)にする。.map(...)で1テーブルずつ変換し、
+        // .collect()で最後にVec(リスト)にまとめる。as_ref().unwrap()は「必ず値が入っているはず」
+        // という前提でOptionの中身を取り出す(このテーブルは生成済みなので必ずSomeになっている)
+        let generated: Vec<GeneratedTable> = order
+            .iter()
+            .map(|&i| GeneratedTable {
+                name: tables[i].name.as_deref(),
+                columns: &tables[i].columns,
+                rows: rows_by_table[i].as_ref().unwrap(),
+            })
+            .collect();
+
+        // フロントエンドから来た文字列("csv"等)を、Rust側の型(Encoding/Format)に変換する。
+        // matchで文字列の中身を見て、どれにも当てはまらなければother(その他)としてエラーにする
+        let encoding = match encoding {
+            "utf8" => Encoding::Utf8,
+            "sjis" => Encoding::Sjis,
+            other => return Err(format!("複数テーブルでは未対応の文字コードです: {other}")),
+        };
+        let format = match format {
+            "csv" => Format::Csv,
+            "sql" => Format::Sql,
+            "xlsx" => Format::Xlsx,
+            other => return Err(format!("複数テーブルでは未対応の出力形式です: {other}")),
+        };
+
+        write_output_multi_table(format, &generated, output_path, encoding, quote_all)
             .map_err(|e| e.to_string())?;
-
-    // 依存順(親→子)に並んでいるorderの各テーブル番号(&i)について、テーブル名・列定義・
-    // 生成済みの行データをひとまとめ(GeneratedTable)にする。.map(...)で1テーブルずつ変換し、
-    // .collect()で最後にVec(リスト)にまとめる。as_ref().unwrap()は「必ず値が入っているはず」
-    // という前提でOptionの中身を取り出す(このテーブルは生成済みなので必ずSomeになっている)
-    let generated: Vec<GeneratedTable> = order
-        .iter()
-        .map(|&i| GeneratedTable {
-            name: tables[i].name.as_deref(),
-            columns: &tables[i].columns,
-            rows: rows_by_table[i].as_ref().unwrap(),
-        })
-        .collect();
-
-    // フロントエンドから来た文字列("csv"等)を、Rust側の型(Encoding/Format)に変換する。
-    // matchで文字列の中身を見て、どれにも当てはまらなければother(その他)としてエラーにする
-    let encoding = match encoding {
-        "utf8" => Encoding::Utf8,
-        "sjis" => Encoding::Sjis,
-        other => return Err(format!("複数テーブルでは未対応の文字コードです: {other}")),
-    };
-    let format = match format {
-        "csv" => Format::Csv,
-        "sql" => Format::Sql,
-        "xlsx" => Format::Xlsx,
-        other => return Err(format!("複数テーブルでは未対応の出力形式です: {other}")),
-    };
-
-    write_output_multi_table(format, &generated, output_path, encoding, quote_all).map_err(|e| e.to_string())?;
-    Ok(())
+        Ok(())
+    })
 }
 
 /// 複数テーブル版のgenerate_dummy_data。外部キーの依存関係を解決してから親→子の順に
@@ -408,6 +447,57 @@ fn generate_dummy_data_multi(app: tauri::AppHandle, request: GenerateRequestMult
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 回帰テスト: アプリが起動直後にクラッシュする不具合が報告された。原因は、単一テーブル
+    // 専用のコマンド(preview_dummy_data/generate_dummy_data)がprepare_tablesを経由せず
+    // prepare_columnsを直接呼んでいたため、「foreign_key列はtables:形式(複数テーブル)
+    // でしか使えない」という検証(元はprepare_tables内にしか無かった)が素通りしていたこと。
+    // 単一テーブルの列がforeign_key型のまま生成に進むと、参照先の値のプール(FKプール)を
+    // 埋める処理(fill_foreign_key_pools、複数テーブル専用の経路でしか呼ばれない)が
+    // 一度も実行されないため、生成時に「FKプールは必ず埋まっている」という前提のexpect()が
+    // 必ずpanicしていた(dummy_data_gen/src/lib.rsのgenerate_value)。
+    // さらにTauriのコマンドはWebView2のコールバック境界の中で実行されるため、このpanicが
+    // アプリ全体を巻き込んでクラッシュさせていた。保存された前回セッションにこの状態の
+    // テーブルが残っていると、起動するたびにプレビューが再実行されてクラッシュを繰り返す。
+    // 修正: reject_foreign_key_in_single_table(dummy_data_gen側)を単一テーブル専用の
+    // 経路にも追加で呼び、prepare_tablesと同じ検証をここでも効かせるようにした。
+    // あわせて、万一同種の想定外panicが今後別の原因で起きても、catch_panic_as_errで
+    // アプリを道連れにせず普通のエラー表示で済むようにした(このテストはその安全網自体の確認)
+    #[test]
+    fn catch_panic_as_err_converts_panic_into_err_instead_of_crashing() {
+        let result: Result<(), String> = catch_panic_as_err(|| {
+            panic!("わざと起こしたテスト用のpanic");
+        });
+        let err = result.expect_err("panicがErrに変換されなかった");
+        assert!(err.contains("わざと起こしたテスト用のpanic"), "エラーメッセージ: {}", err);
+    }
+
+    #[test]
+    fn catch_panic_as_err_passes_through_normal_result() {
+        let ok: Result<i32, String> = catch_panic_as_err(|| Ok(42));
+        assert_eq!(ok, Ok(42));
+
+        let err: Result<i32, String> = catch_panic_as_err(|| Err("通常のエラー".to_string()));
+        assert_eq!(err, Err("通常のエラー".to_string()));
+    }
+
+    // 実際にクラッシュを引き起こしたschema.yaml(単一テーブル、foreign_key列が
+    // 存在しないテーブルを参照)と同じ形で、preview_dummy_dataがpanicせず
+    // 分かりやすいErrを返すことを確認する
+    #[test]
+    fn preview_dummy_data_rejects_foreign_key_column_in_single_table_schema_instead_of_panicking() {
+        let request: PreviewRequest = serde_json::from_value(serde_json::json!({
+            "columns": [
+                { "name": "store_id", "type": "foreign_key", "references": "table2.column2" },
+                { "name": "store_name", "type": "name_ja" }
+            ],
+            "sample_size": 47
+        }))
+        .unwrap();
+
+        let err = preview_dummy_data(request).err().expect("foreign_key列を弾けずにOkを返してしまった");
+        assert!(err.contains("foreign_key"), "エラーメッセージ: {}", err);
+    }
 
     fn users_schema() -> Schema {
         serde_json::from_value(serde_json::json!({

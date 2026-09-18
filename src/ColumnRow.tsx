@@ -27,8 +27,6 @@ const inputClass =
 const iconButtonClass =
   "flex items-center justify-center rounded-md p-1.5 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition cursor-pointer";
 
-const GROUPS = [...new Set(COLUMN_TYPES.map((t) => t.group))];
-
 // これらの型は仕組み上すでに値が絶対に重複しないため、「重複しない値にする」チェックボックスの
 // 代わりに理由を一言添える(dummy_data_gen側のunique_capacityもこの2型には対応していない)
 const ALWAYS_UNIQUE_REASONS: Partial<Record<string, string>> = {
@@ -53,6 +51,13 @@ export function ColumnRow({
 }: Props) {
   const group = COLUMN_TYPES.find((t) => t.id === column.type)?.group;
   const colors = group ? GROUP_COLORS[group] : undefined;
+
+  // foreign_key(外部キー)は参照先の別テーブルが無いと成立しない型なので、テーブルが
+  // このテーブル1個だけ(otherTablesが空)のときは選択肢から外す。これを選べてしまうと、
+  // 存在しないテーブルを参照したまま生成に進み、内部エラーになってしまうため
+  // (dummy_data_gen側のprepare_tables/reject_foreign_key_in_single_tableと同じ制約)
+  const availableColumnTypes = otherTables && otherTables.length > 0 ? COLUMN_TYPES : COLUMN_TYPES.filter((t) => t.id !== "foreign_key");
+  const availableGroups = [...new Set(availableColumnTypes.map((t) => t.group))];
 
   // NULL率欄だけの入力中の下書き(生の文字列)。number型のinputはvalueに数値を
   // 書き戻す作りにすると、"0.05"を1文字ずつ打つ途中の"0."が数値化で"0"に
@@ -98,9 +103,9 @@ export function ColumnRow({
           value={column.type}
           onChange={(e) => onChange(newColumn(column.name, e.target.value))}
         >
-          {GROUPS.map((group) => (
+          {availableGroups.map((group) => (
             <optgroup key={group} label={group}>
-              {COLUMN_TYPES.filter((t) => t.group === group).map((t) => (
+              {availableColumnTypes.filter((t) => t.group === group).map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.label}
                 </option>

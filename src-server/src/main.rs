@@ -15,9 +15,9 @@ use axum::{
 };
 use dummy_data_gen::{
     generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables,
-    resolve_fk_reprs, resolve_foreign_keys, resolve_unique_pools, schema_file_to_yaml, topological_order,
-    write_csv_streaming, write_output_multi_table, write_sql_streaming, write_xlsx_from_rows, ColumnDef,
-    Encoding, Format, GeneratedTable, Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
+    reject_foreign_key_in_single_table, resolve_fk_reprs, resolve_foreign_keys, resolve_unique_pools,
+    schema_file_to_yaml, topological_order, write_csv_streaming, write_output_multi_table, write_sql_streaming,
+    write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
 };
 use serde::{Deserialize, Serialize};
 use tower_http::services::ServeDir;
@@ -125,6 +125,10 @@ fn run_preview(request: PreviewRequest) -> Result<PreviewResult, ApiError> {
 
     let schema = Schema { row_count: request.sample_size, table_name: None, columns: request.columns };
     let mut columns = prepare_columns(&schema).map_err(bad_request)?;
+    // ここは単一テーブル専用の経路(prepare_tablesを経由しない)なので、prepare_tables側が
+    // 持っている「foreign_key列は複数テーブル(tables:形式)でしか使えない」検証をここでも行う。
+    // 怠ると、参照先が無いままFKプールが埋まらず、生成時に内部矛盾でpanicする
+    reject_foreign_key_in_single_table(&columns).map_err(bad_request)?;
     let seed = rand::random();
     resolve_unique_pools(&mut columns, schema.row_count, seed);
     let rows = generate_all_rows(schema.row_count, &columns, seed);
@@ -205,6 +209,9 @@ fn run_generate(request: GenerateRequestWeb, output_path: &str) -> Result<(), Ap
     let schema = Schema { row_count: request.row_count, table_name: request.table_name, columns: request.columns };
 
     let mut columns = prepare_columns(&schema).map_err(bad_request)?;
+    // run_previewと同じ理由(単一テーブル専用の経路はprepare_tablesを経由しないため、
+    // foreign_key列を弾く検証をここでも行う必要がある)
+    reject_foreign_key_in_single_table(&columns).map_err(bad_request)?;
     let base_seed = request.seed.unwrap_or_else(rand::random);
     resolve_unique_pools(&mut columns, schema.row_count, base_seed);
 

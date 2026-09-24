@@ -60,6 +60,44 @@ export function ColumnTypeFields({ column, onChange, otherTables }: Props) {
         </label>
       );
 
+    case "blood_type":
+      return (
+        <label className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={column.with_suffix ?? true}
+            onChange={(e) => set("with_suffix", e.target.checked)}
+          />
+          「型」を付ける(例:A型。外すと「A」)
+        </label>
+      );
+
+    case "postal_code":
+    case "phone_ja":
+    case "phone_ja_landline":
+      return (
+        <label className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={column.with_hyphen ?? true}
+            onChange={(e) => set("with_hyphen", e.target.checked)}
+          />
+          「-」を入れる(外すと数字だけになる)
+        </label>
+      );
+
+    case "credit_card_expiry":
+      return (
+        <label className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={column.with_slash ?? true}
+            onChange={(e) => set("with_slash", e.target.checked)}
+          />
+          「/」を入れる(例:12/28。外すと「1228」)
+        </label>
+      );
+
     case "integer":
     case "float":
       return (

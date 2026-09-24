@@ -117,6 +117,10 @@ export interface ColumnConfig {
   type: string;
   null_rate?: number;
   unique?: boolean;
+  // SQL/JSON/Excel出力時、この列の値を文字列/整数/小数/真偽値のどれとして出力するかを
+  // 列タイプの自動判定から上書きする(例: "VARCHAR(100)"、"INTEGER"のような自由入力の型名)。
+  // 未指定(undefined)のときは今まで通り列タイプから自動判定する。CSVには影響しない
+  data_type?: string;
   // email
   domain?: string;
   // integer / float
@@ -140,6 +144,13 @@ export interface ColumnConfig {
   value?: string;
   // name_ja / katakana_name / katakana_name_hankaku
   with_space?: boolean;
+  // blood_type。未指定(undefined)のときは今まで通りtrue扱い(「A型」のように「型」を付ける)
+  with_suffix?: boolean;
+  // postal_code / phone_ja / phone_ja_landline。未指定(undefined)のときは今まで通りtrue扱い
+  // (「123-4567」のように「-」を入れる)
+  with_hyphen?: boolean;
+  // credit_card_expiry。未指定(undefined)のときは今まで通りtrue扱い(「12/28」のように「/」を入れる)
+  with_slash?: boolean;
   // prefecture_ja / address_ja。指定した都道府県名だけに絞り込む(例: ["東京都", "大阪府"])。
   // 未指定(undefined)のときは今まで通り47都道府県すべてが対象
   allowed_prefectures?: string[];

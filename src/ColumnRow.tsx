@@ -166,6 +166,20 @@ export function ColumnRow({
           </label>
         )}
       </div>
+
+      <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+        <span className="shrink-0">データの型(省略可)</span>
+        <input
+          type="text"
+          className={`${inputClass} max-w-xs`}
+          placeholder="例: VARCHAR(100) / INTEGER / DATE"
+          value={column.data_type ?? ""}
+          onChange={(e) => onChange({ ...column, data_type: e.target.value || undefined })}
+        />
+        <span className="text-slate-400 dark:text-slate-500">
+          空欄なら列の種類から自動判定(SQL・JSON・Excelに反映。CSVは対象外。実際の値と違う型を指定すると出力が壊れることがあります)
+        </span>
+      </div>
     </div>
   );
 }

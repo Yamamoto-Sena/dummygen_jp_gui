@@ -455,6 +455,12 @@ export function ColumnTypeFields({ column, onChange, otherTables, precedingColum
       const setCategoryEntry = (index: number, key: string, value: number) => {
         const entries = [...categoryEntries];
         entries[index] = [key, Number.isNaN(value) ? 0 : value];
+        // Object.fromEntriesは同じキーが複数あると後の方だけを残して上書きするため、
+        // 他の行と同じ値(キー)に変えてしまうと片方の行が説明無しに消えてしまう。
+        // そうなる変更は保存しない(入力欄の表示は元のキーのまま戻る)ことで、行が
+        // 黙って失われるのを防ぐ
+        const keys = entries.map(([k]) => k);
+        if (new Set(keys).size !== keys.length) return;
         set("category_multipliers", Object.fromEntries(entries));
       };
       const removeCategoryEntry = (index: number) => {

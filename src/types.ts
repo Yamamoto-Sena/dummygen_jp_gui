@@ -66,6 +66,7 @@ export const COLUMN_TYPES: ColumnTypeMeta[] = [
   { id: "bank_account_number", label: "銀行口座番号", group: "金融" },
   { id: "my_number", label: "マイナンバー", group: "金融" },
   { id: "product_sku", label: "商品SKU", group: "ビジネス" },
+  { id: "correlated_number", label: "相関のある数値(売上金額など)", group: "ビジネス" },
   { id: "foreign_key", label: "外部キー(他テーブル参照)", group: "識別子" },
 ];
 
@@ -158,6 +159,60 @@ export interface ColumnConfig {
   references?: string;
   // pattern。正規表現に似た簡易パターン(例: "[A-Z]{3}-[0-9]{4}")
   pattern?: string;
+  // correlated_number。掛け合わせる元になる数値列名(この列より前に定義されたinteger/float/
+  // sequence/correlated_numberのみ指定可)。1つ以上必須
+  base_columns?: string[];
+  // correlated_number。指定した列(この列より前の任意の列)の実際の値ごとに倍率を変える。
+  // category_multipliersとセットで指定する(片方だけの指定はエラーになる)
+  category_column?: string;
+  category_multipliers?: Record<string, number>;
+  // correlated_number。指定した日付列(date/birth_date)の月ごとに倍率を変える。
+  // monthly_multipliers(1〜12月の12個)とセットで指定する
+  date_column?: string;
+  monthly_multipliers?: number[];
+  // correlated_number。最後に掛けるランダムなブレ幅(0以上。例: 0.1なら±10%)。未指定は0(ブレ無し)
+  noise?: number;
+}
+
+// dummy_data_gen側のValueCategory(SQL/JSON/Excel出力で値を文字列/整数/小数/真偽値の
+// どれとして扱うか)と対応する4分類。「現在の型」表示にだけ使う
+export type ValueCategory = "text" | "integer" | "float" | "boolean";
+
+export const VALUE_CATEGORY_LABELS: Record<ValueCategory, string> = {
+  text: "文字列",
+  integer: "整数",
+  float: "小数",
+  boolean: "真偽値",
+};
+
+// data_type(データの型)が未指定の列について、dummy_data_gen側のdefault_value_categoryと
+// 同じ考え方で「今は自動的にどの型として出力されるか」を判定する(ColumnRow.tsxの
+// 「現在の型」表示専用。実際の判定はRust側で行われるため、これはあくまでGUI上のヒント)。
+// foreign_keyは参照先の列を辿って判定し、参照先が見つからない/未接続なら安全側でtextにする
+export function inferDefaultValueCategory(
+  column: ColumnConfig,
+  otherTables?: { name: string; columns: ColumnConfig[] }[],
+  depth = 0
+): ValueCategory {
+  if (depth > 5) return "text"; // 循環参照など想定外の入れ子に対する安全弁
+  switch (column.type) {
+    case "sequence":
+    case "integer":
+      return "integer";
+    case "float":
+      return "float";
+    case "boolean":
+      return "boolean";
+    case "correlated_number":
+      return "float";
+    case "foreign_key": {
+      const [refTable, refColumnName] = (column.references ?? "").split(".");
+      const refColumn = otherTables?.find((t) => t.name === refTable)?.columns.find((c) => c.name === refColumnName);
+      return refColumn ? inferDefaultValueCategory(refColumn, otherTables, depth + 1) : "text";
+    }
+    default:
+      return "text";
+  }
 }
 
 // GUI画面上の「テーブル1個分」の単位。複数テーブル対応(外部キー)のために、
@@ -219,6 +274,10 @@ export function newColumn(name: string, type: string): ColumnConfig {
       return { ...base, domain: "example.com" };
     case "foreign_key":
       return { ...base, references: "" };
+    case "correlated_number":
+      // base_columnsは意図的に空のまま(undefined)にしておく。前の列一覧から選んでもらう必要があり、
+      // ここでは(otherTables同様)前の列の情報を持たないため決め打ちできない
+      return { ...base, decimals: 0, noise: 0 };
     default:
       return base;
   }

@@ -3,7 +3,14 @@
 // ボタンを持つ。1行分の見た目と操作をまとめて担当し、実際の状態(ColumnConfig)は親(ColumnEditor)が持つ
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Copy, GripVertical, Trash2 } from "lucide-react";
-import { COLUMN_TYPES, GROUP_COLORS, newColumn, type ColumnConfig } from "./types";
+import {
+  COLUMN_TYPES,
+  GROUP_COLORS,
+  inferDefaultValueCategory,
+  newColumn,
+  VALUE_CATEGORY_LABELS,
+  type ColumnConfig,
+} from "./types";
 import { ColumnTypeFields } from "./ColumnTypeFields";
 
 interface Props {
@@ -20,6 +27,8 @@ interface Props {
   onDragOver: () => void;
   onDragEnd: () => void;
   otherTables?: { name: string; columns: ColumnConfig[] }[];
+  // 同じテーブル内で、この列より前に定義されている列の一覧(correlated_number用)
+  precedingColumns?: ColumnConfig[];
 }
 
 const inputClass =
@@ -48,6 +57,7 @@ export function ColumnRow({
   onDragOver,
   onDragEnd,
   otherTables,
+  precedingColumns,
 }: Props) {
   const group = COLUMN_TYPES.find((t) => t.id === column.type)?.group;
   const colors = group ? GROUP_COLORS[group] : undefined;
@@ -127,7 +137,7 @@ export function ColumnRow({
         </button>
       </div>
 
-      <ColumnTypeFields column={column} onChange={onChange} otherTables={otherTables} />
+      <ColumnTypeFields column={column} onChange={onChange} otherTables={otherTables} precedingColumns={precedingColumns} />
 
       <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400">
         <label className="flex items-center gap-1.5">
@@ -176,8 +186,14 @@ export function ColumnRow({
           value={column.data_type ?? ""}
           onChange={(e) => onChange({ ...column, data_type: e.target.value || undefined })}
         />
+        {/* 空欄のときに「自動判定だと今どの型になるか」が分からず不親切という指摘を受けて追加。
+            手動で入力済みのときは入力した文字列をそのまま「現在の型」として表示する */}
+        <span className="text-slate-400 dark:text-slate-500 shrink-0">
+          現在の型:{" "}
+          {column.data_type ? `${column.data_type}(手動指定)` : `${VALUE_CATEGORY_LABELS[inferDefaultValueCategory(column, otherTables)]}(自動判定)`}
+        </span>
         <span className="text-slate-400 dark:text-slate-500">
-          空欄なら列の種類から自動判定(SQL・JSON・Excelに反映。CSVは対象外。実際の値と違う型を指定すると出力が壊れることがあります)
+          SQL・JSON・Excelに反映(CSVは対象外)。実際の値と違う型を指定すると出力が壊れることがあります
         </span>
       </div>
     </div>

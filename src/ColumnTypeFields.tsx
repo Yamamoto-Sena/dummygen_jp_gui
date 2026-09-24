@@ -12,7 +12,13 @@ interface Props {
   // foreign_key列の「参照するテーブル」選択肢(アクティブなテーブル以外の一覧)。
   // 単一テーブルの列(foreign_key列タイプ自体を使わない場面)では渡さなくてよい
   otherTables?: { name: string; columns: ColumnConfig[] }[];
+  // correlated_number列が参照できる、同じテーブル内でこの列より前にある列の一覧
+  precedingColumns?: ColumnConfig[];
 }
+
+// correlated_number列のbase_columnsが参照できる(=数値として扱われる)列タイプ。
+// dummy_data_gen側のprepare_columns(base_columnsの型チェック)と同じ判定
+const NUMERIC_COLUMN_TYPES = ["integer", "float", "sequence", "correlated_number"];
 
 const inputClass =
   "w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500";
@@ -21,7 +27,7 @@ const labelClass = "text-xs text-slate-500 dark:text-slate-400";
 // 選択中の列タイプに応じて、min/max・choicesなどの追加設定フォームを出し分ける。
 // "{ column, onChange, otherTables }: Props"は、Propsの中から3つの値だけを
 // 名前で取り出す書き方(分割代入と呼ぶ。他の言語で言う「引数をまとめて受け取って展開する」に近い)
-export function ColumnTypeFields({ column, onChange, otherTables }: Props) {
+export function ColumnTypeFields({ column, onChange, otherTables, precedingColumns }: Props) {
   // set(...)は「columnのkeyというフィールドだけをvalueに書き換えた、新しいcolumnを
   // 作ってonChangeに渡す」ための小さなヘルパー関数。
   // "{ ...column, [key]: value }"は、まずcolumnの中身を全部コピーし(...はスプレッド構文と
@@ -421,6 +427,221 @@ export function ColumnTypeFields({ column, onChange, otherTables }: Props) {
               参照できる他のテーブルがありません。先に「テーブルを追加」してください。
             </p>
           )}
+        </div>
+      );
+    }
+
+    case "correlated_number": {
+      const preceding = precedingColumns ?? [];
+      const numericColumns = preceding.filter((c) => NUMERIC_COLUMN_TYPES.includes(c.type));
+      const dateColumns = preceding.filter((c) => c.type === "date" || c.type === "birth_date");
+      const baseColumns = column.base_columns ?? [];
+
+      const toggleBaseColumn = (name: string, checked: boolean) => {
+        set("base_columns", checked ? [...baseColumns, name] : baseColumns.filter((n) => n !== name));
+      };
+
+      // category_column/category_multipliersは常にペアで意味を持つため、参照列を変えたときは
+      // 古い倍率テーブルを引きずらないよう一緒にリセットする(片方だけset()すると
+      // 「選択肢と出現比率」のchoices/weights二重更新バグと同じ問題が起きるため、1回のonChangeにまとめる)
+      const categoryEntries = Object.entries(column.category_multipliers ?? {});
+      const setCategoryColumn = (name: string) => {
+        onChange({
+          ...column,
+          category_column: name || undefined,
+          category_multipliers: name ? (column.category_multipliers ?? {}) : undefined,
+        });
+      };
+      const setCategoryEntry = (index: number, key: string, value: number) => {
+        const entries = [...categoryEntries];
+        entries[index] = [key, Number.isNaN(value) ? 0 : value];
+        set("category_multipliers", Object.fromEntries(entries));
+      };
+      const removeCategoryEntry = (index: number) => {
+        set("category_multipliers", Object.fromEntries(categoryEntries.filter((_, i) => i !== index)));
+      };
+      const addCategoryEntry = () => {
+        set("category_multipliers", { ...(column.category_multipliers ?? {}), [`値${categoryEntries.length + 1}`]: 1 });
+      };
+
+      const monthly = column.monthly_multipliers ?? Array(12).fill(1);
+      const setDateColumn = (name: string) => {
+        onChange({
+          ...column,
+          date_column: name || undefined,
+          monthly_multipliers: name ? (column.monthly_multipliers ?? Array(12).fill(1)) : undefined,
+        });
+      };
+      const setMonthlyAt = (i: number, value: number) => {
+        const next = [...monthly];
+        next[i] = Number.isNaN(value) ? 0 : value;
+        set("monthly_multipliers", next);
+      };
+
+      return (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <span className={labelClass}>掛け合わせる列(例: 数量×単価。1つ以上選択)</span>
+            {numericColumns.length === 0 ? (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                この列より前に数値の列(ランダム数値・ランダム小数・連番・相関のある数値)がありません。先にそちらを追加してください。
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-1">
+                {numericColumns.map((c) => (
+                  <label
+                    key={c.name}
+                    className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={baseColumns.includes(c.name)}
+                      onChange={(e) => toggleBaseColumn(c.name, e.target.checked)}
+                    />
+                    {c.name}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <label className="flex flex-col gap-1">
+            <span className={labelClass}>カテゴリ別倍率(省略可。例: 商品カテゴリで価格帯を変える)</span>
+            <select
+              className={inputClass}
+              value={column.category_column ?? ""}
+              onChange={(e) => setCategoryColumn(e.target.value)}
+            >
+              <option value="">使わない</option>
+              {preceding.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {column.category_column && (
+            <div className="flex flex-col gap-1.5 border-l-2 border-slate-200 dark:border-slate-700 pl-2">
+              {categoryEntries.map(([key, value], i) => (
+                <div key={i} className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    className={`${inputClass} flex-1`}
+                    placeholder="値(例: 食品)"
+                    value={key}
+                    onChange={(e) => setCategoryEntry(i, e.target.value, value)}
+                  />
+                  <input
+                    type="number"
+                    step={0.1}
+                    className={`${inputClass} w-20 shrink-0 !w-20`}
+                    title="倍率"
+                    value={value}
+                    onChange={(e) => setCategoryEntry(i, key, Number(e.target.value))}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeCategoryEntry(i)}
+                    title="この行を削除"
+                    className="rounded p-1 text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={addCategoryEntry}
+                className="flex items-center gap-1 self-start rounded-md border border-dashed border-slate-300 dark:border-slate-700 px-2 py-1 text-xs text-slate-500 dark:text-slate-400 hover:border-cyan-500 hover:text-cyan-600 dark:hover:text-cyan-400 transition cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                値を追加
+              </button>
+              <p className="text-xs text-slate-400 dark:text-slate-500">
+                一覧に無い値が出たときは倍率1.0(変化なし)のままになります。
+              </p>
+            </div>
+          )}
+
+          <label className="flex flex-col gap-1">
+            <span className={labelClass}>季節による倍率(省略可。月ごとに倍率を変える)</span>
+            <select
+              className={inputClass}
+              value={column.date_column ?? ""}
+              onChange={(e) => setDateColumn(e.target.value)}
+              disabled={dateColumns.length === 0}
+            >
+              <option value="">使わない</option>
+              {dateColumns.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            {dateColumns.length === 0 && (
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                この列より前に日付(日付・生年月日)の列があると選べるようになります。
+              </span>
+            )}
+          </label>
+          {column.date_column && (
+            <div className="grid grid-cols-6 gap-1.5 border-l-2 border-slate-200 dark:border-slate-700 pl-2">
+              {monthly.map((m, i) => (
+                <label key={i} className="flex flex-col items-center gap-0.5">
+                  <span className="text-[11px] text-slate-400 dark:text-slate-500">{i + 1}月</span>
+                  <input
+                    type="number"
+                    step={0.1}
+                    className={`${inputClass} !w-14 text-center`}
+                    value={m}
+                    onChange={(e) => setMonthlyAt(i, Number(e.target.value))}
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex flex-col gap-1">
+              <span className={labelClass}>ランダムなブレ幅(0以上。例: 0.1で±10%)</span>
+              <input
+                type="number"
+                min={0}
+                step={0.05}
+                className={inputClass}
+                value={column.noise ?? 0}
+                onChange={(e) => set("noise", Math.max(0, Number(e.target.value) || 0))}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className={labelClass}>小数桁数</span>
+              <input
+                type="number"
+                min={0}
+                className={inputClass}
+                value={column.decimals ?? 0}
+                onChange={(e) => set("decimals", Math.max(0, Number(e.target.value) || 0))}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className={labelClass}>下限(省略可)</span>
+              <input
+                type="number"
+                className={inputClass}
+                value={column.min ?? ""}
+                onChange={(e) => set("min", e.target.value === "" ? undefined : Number(e.target.value))}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className={labelClass}>上限(省略可)</span>
+              <input
+                type="number"
+                className={inputClass}
+                value={column.max ?? ""}
+                onChange={(e) => set("max", e.target.value === "" ? undefined : Number(e.target.value))}
+              />
+            </label>
+          </div>
         </div>
       );
     }

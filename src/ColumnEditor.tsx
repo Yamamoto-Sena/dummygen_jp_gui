@@ -66,6 +66,9 @@ export function ColumnEditor({ columns, onChange, otherTables }: Props) {
           }}
           onDragEnd={() => setDragIndex(null)}
           otherTables={otherTables}
+          // correlated_number列が「この列より前の列」だけを参照できるようにするための一覧
+          // (prefecture_ja→city_jaと同じ「参照される側が前」というRust側の制約に合わせてある)
+          precedingColumns={columns.slice(0, index)}
         />
       ))}
       <button

@@ -100,10 +100,11 @@ curl http://localhost:3000/api/health
 | `row_count` | number | ○ | 生成件数(10〜1,000,000) |
 | `columns` | ColumnDef[] | ○ | 列の一覧 |
 | `table_name` | string | `format`が`"sql"`のときのみ必須 | SQLの`INSERT INTO`に使うテーブル名 |
-| `format` | `"csv"` \| `"sql"` \| `"xlsx"` | ○ | 出力形式 |
+| `format` | `"csv"` \| `"sql"` \| `"json"` \| `"xlsx"` | ○ | 出力形式 |
 | `encoding` | `"utf8"` \| `"sjis"` | ○ | 文字コード(xlsxのときは無視される) |
 | `seed` | number | - | 乱数シード。省略時は毎回ランダム |
 | `quote_all` | boolean | ○ | CSVの全ての値を`""`で囲むか(CSV以外では無視される) |
+| `json_array` | boolean | - | `true`でJSONをファイル全体で1つの配列(`[{...},{...}]`)にする。省略時・`false`は1行1件のNDJSON(JSON以外では無視される) |
 | `file_name` | string | - | ダウンロード時のファイル名の候補。省略時は`output.csv`等 |
 
 ```bash
@@ -113,7 +114,7 @@ curl -X POST http://localhost:3000/api/generate \
   -o output.csv
 ```
 
-レスポンス(`200 OK`): 生成されたファイルのバイト列(`Content-Type`は`csv`/`sql`が`application/octet-stream`、`xlsx`が`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`)。
+レスポンス(`200 OK`): 生成されたファイルのバイト列(`Content-Type`は`csv`/`sql`が`application/octet-stream`、`json`が`application/x-ndjson`(配列形式でも同じ)、`xlsx`が`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`)。
 
 ### `POST /api/generate_multi`
 
@@ -122,12 +123,13 @@ curl -X POST http://localhost:3000/api/generate \
 | フィールド | 型 | 必須 | 説明 |
 |---|---|---|---|
 | `tables` | Schema[] | ○ | テーブルの一覧(`row_count`/`table_name`/`columns`) |
-| `format` | `"csv"` \| `"sql"` \| `"xlsx"` | ○ | 出力形式 |
+| `format` | `"csv"` \| `"sql"` \| `"json"` \| `"xlsx"` | ○ | 出力形式 |
 | `encoding` | `"utf8"` \| `"sjis"` | ○ | 文字コード(xlsxのときは無視される) |
 | `seed` | number | - | 乱数シード |
 | `quote_all` | boolean | ○ | CSVの全ての値を`""`で囲むか(CSV以外では無視される) |
+| `json_array` | boolean | - | `true`でJSONをファイル全体で1つの配列(`[{...},{...}]`)にする。省略時・`false`は1行1件のNDJSON(JSON以外では無視される) |
 
-レスポンス(`200 OK`): ファイルが1個だけ(SQL、またはExcel、またはCSVでテーブルが1個)ならそのファイル、CSVで複数テーブル(ファイルが2個以上)ならそれらをまとめた`output.zip`(`Content-Type: application/zip`)。
+レスポンス(`200 OK`): ファイルが1個だけ(SQL、またはExcel、またはCSV/JSONでテーブルが1個)ならそのファイル、CSV/JSONで複数テーブル(ファイルが2個以上)ならそれらをまとめた`output.zip`(`Content-Type: application/zip`)。
 
 ### `POST /api/export_schema_yaml`
 

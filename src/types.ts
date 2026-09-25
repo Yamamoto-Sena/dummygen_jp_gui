@@ -2,7 +2,7 @@
 // Rust側に列タイプを追加したときは、必ずこちらも合わせて更新すること
 // (自動生成ではなく手動同期のため)。
 
-export type DateFormat = "ymd" | "iso8601" | "slash" | "wareki";
+export type DateFormat = "ymd" | "iso8601" | "slash" | "compact" | "wareki";
 
 // 47都道府県の名前一覧(Rust側のCITIES_BY_PREFECTUREと同じ並び順=北海道→沖縄県)。
 // prefecture_ja / address_ja の「都道府県を絞り込む」チェックボックス一覧の元データ。
@@ -20,54 +20,58 @@ export const PREFECTURES: string[] = [
 export interface ColumnTypeMeta {
   id: string;
   label: string;
+  // 英語名。プルダウンでは「日本語 / English」の形で併記する
+  en: string;
   group: "識別子" | "氏名" | "連絡先・住所" | "日時" | "論理値・定数" | "ビジネス" | "Web/IT" | "金融";
 }
 
 // UIのプルダウンに表示する順序・分類。Rust側のColumnType(enum)の各バリアントに対応する
 export const COLUMN_TYPES: ColumnTypeMeta[] = [
-  { id: "sequence", label: "連番", group: "識別子" },
-  { id: "uuid", label: "UUID", group: "識別子" },
-  { id: "integer", label: "ランダム数値", group: "識別子" },
-  { id: "name_ja", label: "氏名(フルネーム)", group: "氏名" },
-  { id: "last_name_ja", label: "姓(苗字)", group: "氏名" },
-  { id: "first_name_ja", label: "名", group: "氏名" },
-  { id: "katakana_name", label: "フリガナ(全角)", group: "氏名" },
-  { id: "katakana_name_hankaku", label: "フリガナ(半角)", group: "氏名" },
-  { id: "katakana_last_name", label: "フリガナ(姓)", group: "氏名" },
-  { id: "katakana_first_name", label: "フリガナ(名)", group: "氏名" },
-  { id: "romaji_name", label: "ローマ字氏名", group: "氏名" },
-  { id: "gender", label: "性別", group: "氏名" },
-  { id: "blood_type", label: "血液型", group: "氏名" },
-  { id: "email", label: "メールアドレス", group: "連絡先・住所" },
-  { id: "phone_ja", label: "携帯電話番号", group: "連絡先・住所" },
-  { id: "phone_ja_landline", label: "固定電話番号", group: "連絡先・住所" },
-  { id: "postal_code", label: "郵便番号", group: "連絡先・住所" },
-  { id: "prefecture_ja", label: "都道府県", group: "連絡先・住所" },
-  { id: "city_ja", label: "市区町村", group: "連絡先・住所" },
-  { id: "address_ja", label: "住所(1列)", group: "連絡先・住所" },
-  { id: "company_name_ja", label: "会社名", group: "連絡先・住所" },
-  { id: "date", label: "日付(範囲指定)", group: "日時" },
-  { id: "birth_date", label: "生年月日(年齢範囲指定)", group: "日時" },
-  { id: "boolean", label: "Boolean", group: "論理値・定数" },
-  { id: "enum", label: "カスタム選択肢", group: "論理値・定数" },
-  { id: "fixed", label: "固定値テキスト", group: "論理値・定数" },
-  { id: "pattern", label: "カスタムパターン", group: "論理値・定数" },
-  { id: "float", label: "ランダム小数", group: "識別子" },
-  { id: "department_ja", label: "部署名", group: "ビジネス" },
-  { id: "job_title_ja", label: "役職名", group: "ビジネス" },
-  { id: "ip_address", label: "IPアドレス", group: "Web/IT" },
-  { id: "jwt", label: "JWT", group: "Web/IT" },
-  { id: "api_key", label: "APIキー", group: "Web/IT" },
-  { id: "username", label: "ユーザー名", group: "Web/IT" },
-  { id: "password", label: "パスワード", group: "Web/IT" },
-  { id: "profile_image_url", label: "プロフィール画像URL", group: "Web/IT" },
-  { id: "credit_card_number", label: "クレジットカード番号", group: "金融" },
-  { id: "credit_card_expiry", label: "クレジットカード有効期限", group: "金融" },
-  { id: "bank_account_number", label: "銀行口座番号", group: "金融" },
-  { id: "my_number", label: "マイナンバー", group: "金融" },
-  { id: "product_sku", label: "商品SKU", group: "ビジネス" },
-  { id: "correlated_number", label: "相関のある数値(売上金額など)", group: "ビジネス" },
-  { id: "foreign_key", label: "外部キー(他テーブル参照)", group: "識別子" },
+  { id: "sequence", label: "連番", en: "Sequence", group: "識別子" },
+  { id: "uuid", label: "UUID", en: "UUID", group: "識別子" },
+  { id: "integer", label: "ランダム数値", en: "Random integer", group: "識別子" },
+  { id: "name_ja", label: "氏名(フルネーム)", en: "Full name", group: "氏名" },
+  { id: "last_name_ja", label: "姓(苗字)", en: "Last name", group: "氏名" },
+  { id: "first_name_ja", label: "名", en: "First name", group: "氏名" },
+  { id: "katakana_name", label: "フリガナ(全角)", en: "Furigana (full-width)", group: "氏名" },
+  { id: "katakana_name_hankaku", label: "フリガナ(半角)", en: "Furigana (half-width)", group: "氏名" },
+  { id: "katakana_last_name", label: "フリガナ(姓)", en: "Furigana (last name)", group: "氏名" },
+  { id: "katakana_first_name", label: "フリガナ(名)", en: "Furigana (first name)", group: "氏名" },
+  { id: "romaji_name", label: "ローマ字氏名", en: "Romaji name", group: "氏名" },
+  { id: "gender", label: "性別", en: "Gender", group: "氏名" },
+  { id: "blood_type", label: "血液型", en: "Blood type", group: "氏名" },
+  { id: "email", label: "メールアドレス", en: "Email address", group: "連絡先・住所" },
+  { id: "phone_ja", label: "携帯電話番号", en: "Mobile phone number", group: "連絡先・住所" },
+  { id: "phone_ja_landline", label: "固定電話番号", en: "Landline phone number", group: "連絡先・住所" },
+  { id: "postal_code", label: "郵便番号", en: "Postal code", group: "連絡先・住所" },
+  { id: "prefecture_ja", label: "都道府県", en: "Prefecture", group: "連絡先・住所" },
+  { id: "city_ja", label: "市区町村", en: "City / ward", group: "連絡先・住所" },
+  { id: "address_ja", label: "住所(1列)", en: "Address (single column)", group: "連絡先・住所" },
+  { id: "company_name_ja", label: "会社名", en: "Company name", group: "連絡先・住所" },
+  { id: "date", label: "日付(範囲指定)", en: "Date (range)", group: "日時" },
+  { id: "birth_date", label: "生年月日(年齢範囲指定)", en: "Birth date (age range)", group: "日時" },
+  { id: "boolean", label: "Boolean", en: "Boolean", group: "論理値・定数" },
+  { id: "enum", label: "カスタム選択肢", en: "Custom choices", group: "論理値・定数" },
+  { id: "fixed", label: "固定値テキスト", en: "Fixed text", group: "論理値・定数" },
+  { id: "pattern", label: "カスタムパターン", en: "Custom pattern", group: "論理値・定数" },
+  { id: "float", label: "ランダム小数", en: "Random decimal", group: "識別子" },
+  { id: "department_ja", label: "部署名", en: "Department", group: "ビジネス" },
+  { id: "job_title_ja", label: "役職名", en: "Job title", group: "ビジネス" },
+  { id: "ip_address", label: "IPアドレス", en: "IP address", group: "Web/IT" },
+  { id: "jwt", label: "JWT", en: "JWT", group: "Web/IT" },
+  { id: "api_key", label: "APIキー", en: "API key", group: "Web/IT" },
+  { id: "username", label: "ユーザー名", en: "Username", group: "Web/IT" },
+  { id: "password", label: "パスワード", en: "Password", group: "Web/IT" },
+  { id: "profile_image_url", label: "プロフィール画像URL", en: "Profile image URL", group: "Web/IT" },
+  { id: "credit_card_number", label: "クレジットカード番号", en: "Credit card number", group: "金融" },
+  { id: "credit_card_expiry", label: "クレジットカード有効期限", en: "Credit card expiry", group: "金融" },
+  { id: "bank_account_number", label: "銀行口座番号", en: "Bank account number", group: "金融" },
+  { id: "my_number", label: "マイナンバー", en: "My Number (national ID)", group: "金融" },
+  { id: "product_sku", label: "商品SKU", en: "Product SKU", group: "ビジネス" },
+  { id: "correlated_number", label: "相関のある数値(売上金額など)", en: "Correlated number (e.g. sales)", group: "ビジネス" },
+  { id: "tax_amount", label: "消費税額", en: "Consumption tax amount", group: "ビジネス" },
+  { id: "tax_inclusive_amount", label: "税込金額", en: "Tax-inclusive amount", group: "ビジネス" },
+  { id: "foreign_key", label: "外部キー(他テーブル参照)", en: "Foreign key (other table)", group: "識別子" },
 ];
 
 // カラム設定欄がグレー一色で見分けづらいという声を受けて、グループ(氏名/連絡先・住所/…)ごとに
@@ -172,17 +176,30 @@ export interface ColumnConfig {
   monthly_multipliers?: number[];
   // correlated_number。最後に掛けるランダムなブレ幅(0以上。例: 0.1なら±10%)。未指定は0(ブレ無し)
   noise?: number;
+  // tax_amount / tax_inclusive_amount。base_columnは税抜金額(純売上など)の列名(この列より前の
+  // 数値列のみ)。tax_rateとcategory_ratesの値は「10%なら0.10」の割合で持つ(画面では%表示に変換する)。
+  // category_column(上のcorrelated_number用と同名の項目)+category_ratesで区分ごと(軽減税率など)に
+  // 税率を変えられ、一覧に無い値はtax_rateになる。roundingは消費税額の端数処理(未指定は切り捨て)
+  base_column?: string;
+  tax_rate?: number;
+  category_rates?: Record<string, number>;
+  rounding?: TaxRounding;
 }
+
+export type TaxRounding = "floor" | "round" | "ceil";
 
 // dummy_data_gen側のValueCategory(SQL/JSON/Excel出力で値を文字列/整数/小数/真偽値の
 // どれとして扱うか)と対応する4分類。「現在の型」表示にだけ使う
 export type ValueCategory = "text" | "integer" | "float" | "boolean";
 
+// 日本語だけだと分かりにくいという指摘を受けて英語名を併記している。括弧内の2つ目は、
+// data_type欄に入力すると同じ分類として扱われる代表的なSQLの型名(dummy_data_gen側の
+// classify_data_type_nameが認識する名前)
 export const VALUE_CATEGORY_LABELS: Record<ValueCategory, string> = {
-  text: "文字列",
-  integer: "整数",
-  float: "小数",
-  boolean: "真偽値",
+  text: "文字列 (String / VARCHAR)",
+  integer: "整数 (Integer / INT)",
+  float: "小数 (Float / DECIMAL)",
+  boolean: "真偽値 (Boolean / BOOL)",
 };
 
 // data_type(データの型)が未指定の列について、dummy_data_gen側のdefault_value_categoryと
@@ -204,6 +221,11 @@ export function inferDefaultValueCategory(
     case "boolean":
       return "boolean";
     case "correlated_number":
+      return "float";
+    // 消費税額は常に整数、税込金額は税抜金額の小数桁数を引き継ぐため小数(Rust側default_value_categoryと同じ)
+    case "tax_amount":
+      return "integer";
+    case "tax_inclusive_amount":
       return "float";
     case "foreign_key": {
       const [refTable, refColumnName] = (column.references ?? "").split(".");
@@ -274,6 +296,10 @@ export function newColumn(name: string, type: string): ColumnConfig {
       return { ...base, domain: "example.com" };
     case "foreign_key":
       return { ...base, references: "" };
+    case "tax_amount":
+    case "tax_inclusive_amount":
+      // base_columnは意図的に空のまま。前の列一覧から選んでもらう必要があるため(correlated_numberと同じ)
+      return { ...base, base_column: "", tax_rate: 0.1, rounding: "floor" };
     case "correlated_number":
       // base_columnsは意図的に空のまま(undefined)にしておく。前の列一覧から選んでもらう必要があり、
       // ここでは(otherTables同様)前の列の情報を持たないため決め打ちできない
@@ -284,8 +310,9 @@ export function newColumn(name: string, type: string): ColumnConfig {
 }
 
 export type OutputEncoding = "utf8" | "sjis";
-// xlsxは文字コード(OutputEncoding)の概念が無く(dummy_data_gen側の仕様)、常にUTF-8相当で書き出される
-export type OutputFormat = "csv" | "sql" | "xlsx";
+// xlsxは文字コード(OutputEncoding)の概念が無く(dummy_data_gen側の仕様)、常にUTF-8相当で書き出される。
+// jsonはJSONの仕様上UTF-8が前提のため、画面で選ばれた文字コードに関わらず常にutf8で書き出す(App.tsx参照)
+export type OutputFormat = "csv" | "sql" | "json" | "xlsx";
 
 export interface PreviewResult {
   headers: string[];
@@ -302,6 +329,8 @@ export interface GenerateRequest {
   output_path: string;
   // trueのとき、CSV出力の全ての値をダブルクォートで囲む。SQL出力には影響しない
   quote_all: boolean;
+  // trueのとき、JSON出力をファイル全体で1つの配列([{...},{...}])にする。falseならNDJSON(1行1件)。JSON以外には影響しない
+  json_array: boolean;
 }
 
 export interface GenerationProgress {

@@ -6,10 +6,10 @@
 // YAML入出力: export_schema_yaml/import_schema_yaml)。同じ役割を普通のブラウザ向けに
 // 提供する`src-server`にも、ほぼ同じ処理をHTTPハンドラの形で書いた対応物がある。
 use dummy_data_gen::{
-    generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables,
+    build_json_text, generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables,
     reject_foreign_key_in_single_table, resolve_fk_reprs, resolve_foreign_keys, resolve_unique_pools,
     schema_file_to_yaml, topological_order, write_csv_streaming, write_output_multi_table, write_sql_streaming,
-    write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
+    write_text, write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -48,7 +48,7 @@ struct GenerateRequest {
     row_count: u32,
     columns: Vec<ColumnDef>,
     table_name: Option<String>,
-    // "csv" / "sql" / "xlsx"
+    // "csv" / "sql" / "json" / "xlsx"
     format: String,
     // "utf8" または "sjis"。日本語版Excel等でShift-JISを前提とするアプリで開く場合はsjisを選ぶ
     encoding: String,
@@ -57,6 +57,8 @@ struct GenerateRequest {
     // trueのとき、CSV出力の全ての値をダブルクォートで囲む(名称にスペースを含む
     // ケースなどで値の区切りを明確にしたい場合向け)。SQL出力には影響しない
     quote_all: bool,
+    // trueのとき、JSON出力をファイル全体で1つの配列にする(falseならNDJSON)。JSON以外には影響しない
+    json_array: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -77,7 +79,7 @@ struct PreviewResult {
 #[derive(serde::Deserialize)]
 struct GenerateRequestMulti {
     tables: Vec<Schema>,
-    // "csv" / "sql" / "xlsx"(複数テーブルもこの3形式に対応。CLIのjson出力のみGUI未対応のまま)
+    // "csv" / "sql" / "json" / "xlsx"(単一テーブルと同じ4形式に対応)
     format: String,
     encoding: String,
     seed: Option<u64>,
@@ -85,6 +87,8 @@ struct GenerateRequestMulti {
     // trueのとき、CSV出力の全ての値をダブルクォートで囲む(単一テーブルのGenerateRequestと同じ意味。
     // format以外の形式には影響しない)
     quote_all: bool,
+    // trueのとき、JSON出力をテーブルごとに1つの配列にする(単一テーブルのGenerateRequestと同じ意味)
+    json_array: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -253,9 +257,9 @@ fn import_schema_yaml(app: tauri::AppHandle) -> Result<Option<ImportedSchemaFile
     Ok(Some(ImportedSchemaFile { tables: file.tables, multi_table: file.multi_table }))
 }
 
-/// 列定義からダミーデータを生成し、指定されたパスにCSV/SQL/Excel(xlsx)として保存する。
+/// 列定義からダミーデータを生成し、指定されたパスにCSV/SQL/JSON/Excel(xlsx)として保存する。
 /// CSV/SQLはdummy_data_genのストリーミング書き込み(write_csv_streaming/write_sql_streaming)を
-/// そのまま使うことで、大量行(最大100万行)でもメモリを圧迫しない(xlsxだけは後述の理由でこの限りではない)。
+/// そのまま使うことで、大量行(最大100万行)でもメモリを圧迫しない(json/xlsxは後述の理由でこの限りではない)。
 /// 同期関数のままでよい: Tauriは非asyncコマンドを内部でブロッキングスレッドプールに
 /// ディスパッチするため、ここで生成に数秒かかってもUIスレッドは固まらない。
 #[tauri::command]
@@ -314,6 +318,20 @@ fn generate_dummy_data(app: tauri::AppHandle, request: GenerateRequest) -> Resul
                     on_progress,
                 )
             }
+            // jsonはdummy_data_gen側にストリーミング書き込みが無いため(CLIと同じ)、全行をメモリに
+            // 載せてからNDJSON(1行1件)の文字列にして書き出す。進捗イベントはxlsxと同じく完了時に1回だけ送る
+            "json" => {
+                let rows = generate_all_rows(schema.row_count, &columns, base_seed);
+                let result = build_json_text(&columns, &rows, request.json_array)
+                    .and_then(|text| write_text(&text, &request.output_path, encoding));
+                if result.is_ok() {
+                    let _ = app.emit(
+                        "generation:progress",
+                        GenerationProgress { done: schema.row_count as u64, total: schema.row_count as u64 },
+                    );
+                }
+                result
+            }
             // xlsxはバイナリ(ZIP)形式のためストリーミング書き込みが無く、CSV/SQLと違い
             // generate_all_rowsで全行をメモリに載せてから一括で書き出す(--encodingは効かない、
             // dummy_data_gen側の仕様と同じ)。進捗イベントは逐次発火できないため、完了時に1回だけ送る
@@ -346,6 +364,7 @@ fn run_generate_multi(
     seed: Option<u64>,
     output_path: &str,
     quote_all: bool,
+    json_array: bool,
     mut on_table_start: impl FnMut(usize, &dummy_data_gen::PreparedTable),
 ) -> Result<(), String> {
     // 万一dummy_data_gen側の内部矛盾でpanicしても、catch_panic_as_errがアプリ全体の
@@ -400,11 +419,12 @@ fn run_generate_multi(
         let format = match format {
             "csv" => Format::Csv,
             "sql" => Format::Sql,
+            "json" => Format::Json,
             "xlsx" => Format::Xlsx,
             other => return Err(format!("複数テーブルでは未対応の出力形式です: {other}")),
         };
 
-        write_output_multi_table(format, &generated, output_path, encoding, quote_all)
+        write_output_multi_table(format, &generated, output_path, encoding, quote_all, json_array)
             .map_err(|e| e.to_string())?;
         Ok(())
     })
@@ -414,7 +434,7 @@ fn run_generate_multi(
 /// 生成し、write_output_multi_table(dummy_data_gen側、非ストリーミング)で書き出す。
 /// 単一テーブル(generate_dummy_data)と違い、全テーブル分の行を一度メモリに載せてから
 /// 書き出す方式(ユーザー確認済み: 複数テーブルはまずこの方式で実装する)。
-/// quote_allはCSV形式のときだけ効く(sql/xlsxには影響しない。dummy_data_gen側のwrite_output_multi_tableと同じ)。
+/// quote_allはCSV形式のときだけ効く(sql/json/xlsxには影響しない。dummy_data_gen側のwrite_output_multi_tableと同じ)。
 #[tauri::command]
 fn generate_dummy_data_multi(app: tauri::AppHandle, request: GenerateRequestMulti) -> Result<(), String> {
     let total_tables = request.tables.len() as u64;
@@ -428,6 +448,7 @@ fn generate_dummy_data_multi(app: tauri::AppHandle, request: GenerateRequestMult
         request.seed,
         &request.output_path,
         request.quote_all,
+        request.json_array,
         move |_idx, _table| {
             let _ =
                 app_for_progress.emit("generation:progress", GenerationProgress { done: done_count, total: total_tables });
@@ -544,6 +565,7 @@ mod tests {
             Some(42),
             base_path.to_str().unwrap(),
             false,
+            false,
             |_, _| {},
         )
         .err()
@@ -564,7 +586,8 @@ mod tests {
             "format": "csv",
             "encoding": "utf8",
             "output_path": "dummy.csv",
-            "quote_all": false
+            "quote_all": false,
+            "json_array": false
         }))
         .unwrap();
 
@@ -587,6 +610,7 @@ mod tests {
             "utf8",
             Some(42),
             base_path.to_str().unwrap(),
+            false,
             false,
             |_idx, table| started_tables.push(table.name.clone().unwrap_or_default()),
         )
@@ -626,12 +650,73 @@ mod tests {
             Some(42),
             base_path.to_str().unwrap(),
             false,
+            false,
             |_, _| {},
         )
         .expect("xlsx形式での複数テーブル生成に失敗した");
 
         let bytes = std::fs::read(&base_path).unwrap();
         assert!(!bytes.is_empty(), "xlsxファイルが空だった");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 複数テーブルのJSON出力は、CSVと同じくテーブルごとに別ファイルになり、
+    // 中身は1行1件のJSONオブジェクト(NDJSON)になることを確認する
+    #[test]
+    fn run_generate_multi_writes_ndjson_per_table() {
+        let dir = std::env::temp_dir().join(format!("dummygen_jp_gui_json_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base_path = dir.join("multi_test_out.json");
+
+        run_generate_multi(
+            vec![users_schema(), orders_schema()],
+            "json",
+            "utf8",
+            Some(42),
+            base_path.to_str().unwrap(),
+            false,
+            false,
+            |_, _| {},
+        )
+        .expect("json形式での複数テーブル生成に失敗した");
+
+        let users_json = std::fs::read_to_string(dir.join("multi_test_out_users.json")).unwrap();
+        let orders_json = std::fs::read_to_string(dir.join("multi_test_out_orders.json")).unwrap();
+        assert_eq!(users_json.lines().count(), 5);
+        assert_eq!(orders_json.lines().count(), 8);
+        for line in users_json.lines().chain(orders_json.lines()) {
+            let value: serde_json::Value = serde_json::from_str(line).expect("1行ずつJSONとして読めるはず");
+            assert!(value.is_object());
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // json_array: trueのときは、テーブルごとのファイルが「ファイル全体で1つのJSON配列」になることを確認する
+    #[test]
+    fn run_generate_multi_json_array_writes_one_array_per_table() {
+        let dir = std::env::temp_dir().join(format!("dummygen_jp_gui_json_array_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base_path = dir.join("multi_test_out.json");
+
+        run_generate_multi(
+            vec![users_schema(), orders_schema()],
+            "json",
+            "utf8",
+            Some(42),
+            base_path.to_str().unwrap(),
+            false,
+            true,
+            |_, _| {},
+        )
+        .expect("json(配列形式)での複数テーブル生成に失敗した");
+
+        for (file, expected_len) in [("multi_test_out_users.json", 5), ("multi_test_out_orders.json", 8)] {
+            let text = std::fs::read_to_string(dir.join(file)).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&text).expect("ファイル全体で1つのJSONとして読めるはず");
+            assert_eq!(value.as_array().expect("トップレベルが配列のはず").len(), expected_len);
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -651,6 +736,7 @@ mod tests {
             Some(42),
             base_path.to_str().unwrap(),
             true,
+            false,
             |_, _| {},
         )
         .expect("複数テーブルの生成に失敗した");

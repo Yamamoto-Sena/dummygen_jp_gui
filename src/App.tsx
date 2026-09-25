@@ -1,4 +1,4 @@
-// 画面全体の入れ物となるコンポーネント。テーブル一覧(tables)・出力設定(format/encoding/quoteAll)
+// 画面全体の入れ物となるコンポーネント。テーブル一覧(tables)・出力設定(format/encoding/quoteAll/jsonArray)
 // といった画面全体の状態をここでまとめて持ち、各パネル(ColumnEditor/ExportPanel/PreviewTable等)に
 // propsとして配って組み立てる「親」の役割。生成・プレビュー等の実際の処理自体はuseDummyGenフックに
 // 任せていて、このファイルは「画面のどの部分に何を表示するか」の組み立てに専念している。
@@ -77,9 +77,10 @@ function App() {
   const [theme, setTheme] = useState<"light" | "dark">("dark"); // 配色(ライト/ダーク)
   const [tables, setTables] = useState<TableConfig[]>([DEFAULT_TABLE]); // テーブル一覧(列設定を含む)
   const [activeTableId, setActiveTableId] = useState<string>(DEFAULT_TABLE.id); // 今選んでいるテーブルのid
-  const [format, setFormat] = useState<OutputFormat>("csv"); // 出力フォーマット(csv/sql/xlsx)
+  const [format, setFormat] = useState<OutputFormat>("csv"); // 出力フォーマット(csv/sql/json/xlsx)
   const [encoding, setEncoding] = useState<OutputEncoding>("utf8"); // 文字コード(utf8/sjis)
   const [quoteAll, setQuoteAll] = useState(false); // CSVの値を""で囲むか
+  const [jsonArray, setJsonArray] = useState(false); // JSONを配列形式([{...},{...}])で出力するか
   const [successPath, setSuccessPath] = useState<string | null>(null); // 生成成功時に表示するファイル名
   const [previewSize, setPreviewSize] = useState(DEFAULT_PREVIEW_SAMPLE_SIZE); // プレビューの表示件数
   const [previewByTable, setPreviewByTable] = useState<Record<string, PreviewResult>>({}); // テーブルidごとのプレビュー結果
@@ -125,6 +126,7 @@ function App() {
       setFormat(last.format);
       setEncoding(last.encoding);
       setQuoteAll(last.quoteAll ?? false);
+      setJsonArray(last.jsonArray ?? false);
     }
     setSavedConfigs(loadSavedConfigs());
   }, []);
@@ -138,10 +140,10 @@ function App() {
   // 「最後の変更から500ms操作が無かったとき」だけ実際に保存が行われる
   useEffect(() => {
     const timer = setTimeout(() => {
-      saveLastSession({ tables, format, encoding, quoteAll });
+      saveLastSession({ tables, format, encoding, quoteAll, jsonArray });
     }, SESSION_SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [tables, format, encoding, quoteAll]);
+  }, [tables, format, encoding, quoteAll, jsonArray]);
 
   // テーブル一覧が変わるたびに、少し待ってからサンプルデータを取り直す
   // (連続入力のたびに毎回呼ぶと重くなるため400ms待つ)。
@@ -298,7 +300,9 @@ function App() {
     }
 
     const extension = format;
-    const defaultName = format === "sql" ? "output.sql" : format === "xlsx" ? "output.xlsx" : "output.csv";
+    const defaultName = `output.${format}`;
+    // JSONはUTF-8以外で書き出すと多くのツールで読めなくなるため、画面の文字コード選択(CSV/SQL用)は使わない
+    const outputEncoding = format === "json" ? "utf8" : encoding;
     // pickSavePathはTauriならネイティブの保存ダイアログを開き、ブラウザなら
     // (保存先という概念が無いので)defaultNameをそのまま返すだけになる(useDummyGen.ts参照)
     const outputPath = await pickSavePath(defaultName, extension.toUpperCase(), extension);
@@ -313,25 +317,26 @@ function App() {
         columns: t.columns,
         table_name: format === "sql" ? t.name : undefined,
         format,
-        encoding,
+        encoding: outputEncoding,
         output_path: outputPath,
         quote_all: quoteAll,
+        json_array: jsonArray,
       });
     } else {
       // テーブルが2個以上のときは、複数テーブル用のgenerateMulti関数を呼ぶ。
       // map(...)で各テーブルの状態(TableConfig)を、Rust側が期待する形(SchemaInput、
       // row_count/table_name/columnsという名前)に1つずつ変換してリストにする
       const request: SchemaInput[] = tables.map((t) => ({ row_count: t.rowCount, table_name: t.name, columns: t.columns }));
-      ok = await generateMulti(request, format, encoding, outputPath, quoteAll);
+      ok = await generateMulti(request, format, outputEncoding, outputPath, quoteAll, jsonArray);
     }
     if (ok) {
       // ブラウザ版の複数テーブルは、実際にダウンロードされるファイル名がoutputPathと異なる
-      // (SQLは1ファイルだがCSVは2個以上のファイルをzipにまとめる。src-server/src/main.rsの
+      // (SQL/xlsxは1ファイルだがCSV/JSONはテーブルごとの2個以上のファイルをzipにまとめる。src-server/src/main.rsの
       // generate_multiと同じ判定)。Tauri版・単一テーブルはoutputPathがそのまま実際の名前。
       // 三項演算子(条件 ? A : B)を入れ子にした書き方で、内側から読むと分かりやすい:
       //   まず「複数テーブル かつ ブラウザ実行」でなければ、outputPathをそのまま使う
       //   そうであれば、format(出力形式)を見て、sql→"output.sql"、xlsx→"output.xlsx"、
-      //   それ以外(csv、複数ファイルになるケース)→"output.zip" を選ぶ
+      //   それ以外(csv/json、複数ファイルになるケース)→"output.zip" を選ぶ
       const downloadedName =
         isMultiTable && !isTauriRuntime()
           ? format === "sql"
@@ -358,7 +363,7 @@ function App() {
   };
 
   const handleSaveConfig = (name: string) => {
-    setSavedConfigs(upsertSavedConfig(name, { tables, format, encoding, quoteAll }));
+    setSavedConfigs(upsertSavedConfig(name, { tables, format, encoding, quoteAll, jsonArray }));
   };
 
   const handleLoadConfig = (config: SavedConfig) => {
@@ -367,6 +372,7 @@ function App() {
     setFormat(config.state.format);
     setEncoding(config.state.encoding);
     setQuoteAll(config.state.quoteAll ?? false);
+    setJsonArray(config.state.jsonArray ?? false);
     setSuccessPath(null);
     setToolsMenuOpen(false);
   };
@@ -533,6 +539,8 @@ function App() {
             onEncodingChange={setEncoding}
             quoteAll={quoteAll}
             onQuoteAllChange={setQuoteAll}
+            jsonArray={jsonArray}
+            onJsonArrayChange={setJsonArray}
             onGenerate={handleGenerate}
             isGenerating={isGenerating}
             progress={progress}

@@ -140,6 +140,7 @@ export function useDummyGen() {
       encoding: OutputEncoding,
       outputPath: string,
       quoteAll: boolean,
+      jsonArray: boolean,
     ) => {
       setError(null);
       setIsGenerating(true);
@@ -147,10 +148,16 @@ export function useDummyGen() {
       try {
         if (isTauriRuntime()) {
           await invoke("generate_dummy_data_multi", {
-            request: { tables, format, encoding, output_path: outputPath, quote_all: quoteAll },
+            request: { tables, format, encoding, output_path: outputPath, quote_all: quoteAll, json_array: jsonArray },
           });
         } else {
-          const res = await apiPost("/api/generate_multi", { tables, format, encoding, quote_all: quoteAll });
+          const res = await apiPost("/api/generate_multi", {
+            tables,
+            format,
+            encoding,
+            quote_all: quoteAll,
+            json_array: jsonArray,
+          });
           const blob = await res.blob();
           const fallbackName = format === "sql" ? "output.sql" : format === "xlsx" ? "output.xlsx" : "output.zip";
           downloadBlob(blob, fileNameFromResponse(res, fallbackName));

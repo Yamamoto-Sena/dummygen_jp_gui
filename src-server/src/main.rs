@@ -14,10 +14,10 @@ use axum::{
     Json, Router,
 };
 use dummy_data_gen::{
-    generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables,
+    build_json_text, generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables,
     reject_foreign_key_in_single_table, resolve_fk_reprs, resolve_foreign_keys, resolve_unique_pools,
     schema_file_to_yaml, topological_order, write_csv_streaming, write_output_multi_table, write_sql_streaming,
-    write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
+    write_text, write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
 };
 use serde::{Deserialize, Serialize};
 use tower_http::services::ServeDir;
@@ -60,6 +60,10 @@ struct GenerateRequestWeb {
     encoding: String,
     seed: Option<u64>,
     quote_all: bool,
+    // trueのとき、JSON出力をファイル全体で1つの配列にする(falseならNDJSON)。JSON以外には影響しない。
+    // この項目を追加する前からAPIを使っている呼び出し側を壊さないよう、省略可(省略時false)にしている
+    #[serde(default)]
+    json_array: bool,
     file_name: Option<String>,
 }
 
@@ -70,8 +74,11 @@ struct GenerateRequestMultiWeb {
     encoding: String,
     seed: Option<u64>,
     // trueのとき、CSV出力の全ての値をダブルクォートで囲む(GenerateRequestWeb.quote_allと同じ意味。
-    // format以外の形式(sql/xlsx)には影響しない。run_generate_multiがそのままwrite_output_multi_tableに渡す)
+    // format以外の形式(sql/json/xlsx)には影響しない。run_generate_multiがそのままwrite_output_multi_tableに渡す)
     quote_all: bool,
+    // GenerateRequestWeb.json_arrayと同じ意味(省略時false)
+    #[serde(default)]
+    json_array: bool,
 }
 
 #[derive(Deserialize)]
@@ -180,6 +187,7 @@ async fn preview_multi(
 fn default_file_name(format: &str) -> String {
     match format {
         "sql" => "output.sql".to_string(),
+        "json" => "output.json".to_string(),
         "xlsx" => "output.xlsx".to_string(),
         _ => "output.csv".to_string(),
     }
@@ -190,6 +198,8 @@ fn default_file_name(format: &str) -> String {
 fn file_response(bytes: Vec<u8>, file_name: &str) -> Response {
     let content_type = if file_name.ends_with(".zip") {
         "application/zip"
+    } else if file_name.ends_with(".json") {
+        "application/x-ndjson"
     } else if file_name.ends_with(".xlsx") {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     } else {
@@ -249,8 +259,13 @@ fn run_generate(request: GenerateRequestWeb, output_path: &str) -> Result<(), Ap
                 |_, _| {},
             )
         }
-        // xlsxはストリーミング書き込みが無いため(dummy_data_gen側の仕様)、
+        // json/xlsxはストリーミング書き込みが無いため(dummy_data_gen側の仕様)、
         // generate_all_rowsで全行をメモリに載せてから一括で書き出す
+        "json" => {
+            let rows = generate_all_rows(schema.row_count, &columns, base_seed);
+            build_json_text(&columns, &rows, request.json_array)
+                .and_then(|text| write_text(&text, output_path, encoding))
+        }
         "xlsx" => {
             let rows = generate_all_rows(schema.row_count, &columns, base_seed);
             write_xlsx_from_rows(&columns, &rows, output_path)
@@ -334,15 +349,17 @@ fn run_generate_multi(request: GenerateRequestMultiWeb, output_base_path: &str) 
     let format = match request.format.as_str() {
         "csv" => Format::Csv,
         "sql" => Format::Sql,
+        "json" => Format::Json,
         "xlsx" => Format::Xlsx,
         other => return Err(bad_request(format!("複数テーブルでは未対応の出力形式です: {other}"))),
     };
 
-    write_output_multi_table(format, &generated, output_base_path, encoding, request.quote_all).map_err(internal_error)
+    write_output_multi_table(format, &generated, output_base_path, encoding, request.quote_all, request.json_array)
+        .map_err(internal_error)
 }
 
-// 複数テーブルの生成結果は、ファイルが1個だけ(SQL、またはCSVでテーブルが1個)ならそのまま、
-// 2個以上(CSVで複数テーブル)ならzipにまとめてダウンロードさせる
+// 複数テーブルの生成結果は、ファイルが1個だけ(SQL/xlsx、またはCSV/JSONでテーブルが1個)ならそのまま、
+// 2個以上(CSV/JSONで複数テーブル)ならzipにまとめてダウンロードさせる
 async fn generate_multi(Json(request): Json<GenerateRequestMultiWeb>) -> Result<Response, ApiError> {
     let format = request.format.clone();
 
@@ -354,6 +371,7 @@ async fn generate_multi(Json(request): Json<GenerateRequestMultiWeb>) -> Result<
         // 必ず拡張子付きのベース名を渡すことでこれを避ける
         let base_name = match format.as_str() {
             "sql" => "output.sql",
+            "json" => "output.json",
             "xlsx" => "output.xlsx",
             _ => "output.csv",
         };
@@ -506,6 +524,7 @@ mod tests {
             encoding: "utf8".to_string(),
             seed: Some(1),
             quote_all: false,
+            json_array: false,
             file_name: None,
         };
         let path = temp_path("generate_test.csv");
@@ -524,6 +543,7 @@ mod tests {
             encoding: "utf8".to_string(),
             seed: Some(1),
             quote_all: false,
+            json_array: false,
             file_name: None,
         };
         let path = temp_path("generate_test.xlsx");
@@ -542,6 +562,7 @@ mod tests {
             encoding: "utf8".to_string(),
             seed: None,
             quote_all: false,
+            json_array: false,
             file_name: None,
         };
         let path = temp_path("generate_test_no_table_name.sql");
@@ -557,6 +578,7 @@ mod tests {
             encoding: "utf8".to_string(),
             seed: Some(42),
             quote_all: false,
+            json_array: false,
         };
         let base_path = temp_path("generate_multi_test.csv");
         let written =
@@ -585,6 +607,7 @@ mod tests {
             encoding: "utf8".to_string(),
             seed: Some(42),
             quote_all: true,
+            json_array: false,
         };
         let base_path = temp_path("generate_multi_quote_all_test.csv");
         let written =

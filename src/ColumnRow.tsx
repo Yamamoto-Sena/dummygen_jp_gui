@@ -103,13 +103,13 @@ export function ColumnRow({
         )}
         <input
           type="text"
-          className={`${inputClass} flex-1`}
+          className={`${inputClass} flex-1 min-w-[7rem]`}
           placeholder="列名"
           value={column.name}
           onChange={(e) => onChange({ ...column, name: e.target.value })}
         />
         <select
-          className={`${inputClass} w-48 shrink-0 !w-48`}
+          className={`${inputClass} w-52 shrink-0 !w-52`}
           value={column.type}
           onChange={(e) => onChange(newColumn(column.name, e.target.value))}
         >
@@ -117,7 +117,7 @@ export function ColumnRow({
             <optgroup key={group} label={group}>
               {availableColumnTypes.filter((t) => t.group === group).map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.label}
+                  {t.label === t.en ? t.label : `${t.label} / ${t.en}`}
                 </option>
               ))}
             </optgroup>
@@ -177,22 +177,26 @@ export function ColumnRow({
         )}
       </div>
 
-      <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+      {/* 「現在の型」に英語名を併記して文字数が増えたため、1行に全部並べると入力欄が
+          極端に細くなる。折り返し(flex-wrap)を許し、注意書きは常に次の行(basis-full)に出す */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
         <span className="shrink-0">データの型(省略可)</span>
         <input
           type="text"
-          className={`${inputClass} max-w-xs`}
+          className={`${inputClass} w-64 !w-64 max-w-full`}
           placeholder="例: VARCHAR(100) / INTEGER / DATE"
           value={column.data_type ?? ""}
           onChange={(e) => onChange({ ...column, data_type: e.target.value || undefined })}
         />
         {/* 空欄のときに「自動判定だと今どの型になるか」が分からず不親切という指摘を受けて追加。
             手動で入力済みのときは入力した文字列をそのまま「現在の型」として表示する */}
-        <span className="text-slate-400 dark:text-slate-500 shrink-0">
-          現在の型:{" "}
-          {column.data_type ? `${column.data_type}(手動指定)` : `${VALUE_CATEGORY_LABELS[inferDefaultValueCategory(column, otherTables)]}(自動判定)`}
-        </span>
         <span className="text-slate-400 dark:text-slate-500">
+          現在の型:{" "}
+          {column.data_type
+            ? `${column.data_type} (手動指定 / manual)`
+            : `${VALUE_CATEGORY_LABELS[inferDefaultValueCategory(column, otherTables)]} (自動判定 / auto)`}
+        </span>
+        <span className="basis-full text-slate-400 dark:text-slate-500">
           SQL・JSON・Excelに反映(CSVは対象外)。実際の値と違う型を指定すると出力が壊れることがあります
         </span>
       </div>

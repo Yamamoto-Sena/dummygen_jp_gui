@@ -1,4 +1,5 @@
-// 出力フォーマット(CSV/SQL/Excel)・文字コード・quote_all(CSVの値を""で囲むか)を選び、
+// 出力フォーマット(CSV/SQL/JSON/Excel)・文字コード・quote_all(CSVの値を""で囲むか)・
+// json_array(JSONを配列形式にするか)を選び、
 // 「ファイルに書き出す」ボタンを押すパネル。実際の生成処理はここでは行わず、
 // 選んだ設定をonGenerate()経由で親(App.tsx)に伝えるだけ
 import { Loader2, Save, TriangleAlert } from "lucide-react";
@@ -12,6 +13,8 @@ interface Props {
   onEncodingChange: (value: OutputEncoding) => void;
   quoteAll: boolean;
   onQuoteAllChange: (value: boolean) => void;
+  jsonArray: boolean;
+  onJsonArrayChange: (value: boolean) => void;
   onGenerate: () => void;
   isGenerating: boolean;
   progress: GenerationProgress | null;
@@ -36,6 +39,8 @@ export function ExportPanel({
   onEncodingChange,
   quoteAll,
   onQuoteAllChange,
+  jsonArray,
+  onJsonArrayChange,
   onGenerate,
   isGenerating,
   progress,
@@ -59,6 +64,10 @@ export function ExportPanel({
             SQL (INSERT)
           </label>
           <label className="flex items-center gap-1.5 cursor-pointer">
+            <input type="radio" checked={format === "json"} onChange={() => onFormatChange("json")} />
+            JSON
+          </label>
+          <label className="flex items-center gap-1.5 cursor-pointer">
             <input type="radio" checked={format === "xlsx"} onChange={() => onFormatChange("xlsx")} />
             Excel (.xlsx)
           </label>
@@ -79,8 +88,24 @@ export function ExportPanel({
         </div>
       )}
 
-      {/* こちらは"条件 ? A : B"という三項演算子で、「xlsxならA(注意書き)、それ以外(csv/sql)ならB(文字コード選択)」を出し分ける */}
-      {format === "xlsx" ? (
+      {/* JSONは文字コード選択を出さず、配列形式にするかのチェックと注意書きだけを出す */}
+      {format === "json" && (
+        <div className="flex flex-col gap-1">
+          <label className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200 cursor-pointer">
+            <input type="checkbox" checked={jsonArray} onChange={(e) => onJsonArrayChange(e.target.checked)} />
+            配列形式で出力する([ ] で全体を囲む)
+          </label>
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            {jsonArray
+              ? "ファイル全体を1つのJSON配列として書き出します。ファイルをまるごと読み込むツール向けです。"
+              : "1行に1件ずつJSONオブジェクトを書き出す形式(NDJSON)です。1行ずつ読み込むツール向けです。"}
+            文字コードは常にUTF-8になります。全行を一度にメモリへ載せてから書き出すため、件数が多いとCSV/SQLより時間がかかります。
+          </p>
+        </div>
+      )}
+
+      {/* こちらは"条件 ? A : B"という三項演算子で、「xlsxならA(注意書き)、csv/sqlならB(文字コード選択)」を出し分ける(jsonは上の注意書きのみ) */}
+      {format === "json" ? null : format === "xlsx" ? (
         <div className="flex flex-col gap-2">
           <p className="text-xs text-slate-400 dark:text-slate-500">
             Excel(.xlsx)はファイル自体に文字コードの概念が無いため、文字コードの指定は不要です。全行を一度にメモリへ載せてから書き出すため、CSV/SQLより時間がかかります。

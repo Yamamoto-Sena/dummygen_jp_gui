@@ -2,7 +2,7 @@
 // switch文で出し分けるコンポーネント。「型を選んだら、その型に必要な入力欄だけが増える」画面の
 // 中心部分にあたる
 import { Plus, Trash2 } from "lucide-react";
-import { PREFECTURES, type ColumnConfig, type DateFormat } from "./types";
+import { PREFECTURES, type ColumnConfig, type DateFormat, type TaxRounding } from "./types";
 
 // interfaceは「このコンポーネントがどんなprops(親から受け取る値)を必要とするか」を
 // TypeScriptに教えるための型定義。?が付いているotherTablesは「無くてもよい(省略可能)」という意味
@@ -652,6 +652,154 @@ export function ColumnTypeFields({ column, onChange, otherTables, precedingColum
       );
     }
 
+    case "tax_amount":
+    case "tax_inclusive_amount": {
+      const preceding = precedingColumns ?? [];
+      const numericColumns = preceding.filter((c) => NUMERIC_COLUMN_TYPES.includes(c.type));
+
+      // 税率は内部では割合(0.10)、画面では%(10)で扱う。0.07*100=7.000000000000001のような
+      // 浮動小数点の誤差が表示に出ないよう、小数第6位で丸めてから変換する
+      const toPercent = (rate: number) => Math.round(rate * 100 * 1e6) / 1e6;
+      const fromPercent = (percent: number) => (Number.isNaN(percent) ? 0 : Math.round(percent * 1e4) / 1e6);
+
+      // correlated_numberの倍率表と同じ考え方(参照列を変えたら古い税率表を引きずらないようペアでリセット、
+      // 同じ値(キー)への変更は行が消えてしまうため保存しない)
+      const rateEntries = Object.entries(column.category_rates ?? {});
+      const setCategoryColumn = (name: string) => {
+        onChange({
+          ...column,
+          category_column: name || undefined,
+          category_rates: name ? (column.category_rates ?? {}) : undefined,
+        });
+      };
+      const setRateEntry = (index: number, key: string, rate: number) => {
+        const entries = [...rateEntries];
+        entries[index] = [key, rate];
+        const keys = entries.map(([k]) => k);
+        if (new Set(keys).size !== keys.length) return;
+        set("category_rates", Object.fromEntries(entries));
+      };
+      const removeRateEntry = (index: number) => {
+        set("category_rates", Object.fromEntries(rateEntries.filter((_, i) => i !== index)));
+      };
+      const addRateEntry = () => {
+        set("category_rates", { ...(column.category_rates ?? {}), [`値${rateEntries.length + 1}`]: 0.08 });
+      };
+
+      return (
+        <div className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1">
+            <span className={labelClass}>税抜金額の列(例: 純売上)</span>
+            <select
+              className={inputClass}
+              value={column.base_column ?? ""}
+              onChange={(e) => set("base_column", e.target.value)}
+            >
+              <option value="">選択してください</option>
+              {numericColumns.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            {numericColumns.length === 0 && (
+              <span className="text-xs text-amber-600 dark:text-amber-400">
+                この列より前に数値の列(ランダム数値・ランダム小数・連番・相関のある数値)がありません。先に純売上の列を追加してください。
+              </span>
+            )}
+          </label>
+
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex flex-col gap-1">
+              <span className={labelClass}>標準の税率(%)</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                className={inputClass}
+                value={toPercent(column.tax_rate ?? 0.1)}
+                onChange={(e) => set("tax_rate", fromPercent(Number(e.target.value)))}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className={labelClass}>消費税額の端数処理</span>
+              <select
+                className={inputClass}
+                value={column.rounding ?? "floor"}
+                onChange={(e) => set("rounding", e.target.value as TaxRounding)}
+              >
+                <option value="floor">切り捨て</option>
+                <option value="round">四捨五入</option>
+                <option value="ceil">切り上げ</option>
+              </select>
+            </label>
+          </div>
+
+          <label className="flex flex-col gap-1">
+            <span className={labelClass}>区分ごとに税率を変える(省略可。例: 軽減税率の食品は8%)</span>
+            <select
+              className={inputClass}
+              value={column.category_column ?? ""}
+              onChange={(e) => setCategoryColumn(e.target.value)}
+            >
+              <option value="">使わない</option>
+              {preceding.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {column.category_column && (
+            <div className="flex flex-col gap-1.5 border-l-2 border-slate-200 dark:border-slate-700 pl-2">
+              {rateEntries.map(([key, rate], i) => (
+                <div key={i} className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    className={`${inputClass} flex-1`}
+                    placeholder="値(例: 食品)"
+                    value={key}
+                    onChange={(e) => setRateEntry(i, e.target.value, rate)}
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    className={`${inputClass} w-20 shrink-0 !w-20`}
+                    title="税率(%)"
+                    value={toPercent(rate)}
+                    onChange={(e) => setRateEntry(i, key, fromPercent(Number(e.target.value)))}
+                  />
+                  <span className="text-xs text-slate-400 dark:text-slate-500">%</span>
+                  <button
+                    type="button"
+                    onClick={() => removeRateEntry(i)}
+                    title="この行を削除"
+                    className="rounded p-1 text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={addRateEntry}
+                className="flex items-center gap-1 self-start rounded-md border border-dashed border-slate-300 dark:border-slate-700 px-2 py-1 text-xs text-slate-500 dark:text-slate-400 hover:border-cyan-500 hover:text-cyan-600 dark:hover:text-cyan-400 transition cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                値を追加
+              </button>
+              <p className="text-xs text-slate-400 dark:text-slate-500">
+                一覧に無い値が出たときは、上の標準の税率になります。
+              </p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     default:
       return null;
   }
@@ -669,6 +817,7 @@ function DateFormatSelect({ column, onChange }: Props) {
         <option value="ymd">YYYY-MM-DD</option>
         <option value="iso8601">ISO8601</option>
         <option value="slash">YYYY/MM/DD</option>
+        <option value="compact">YYYYMMDD(区切りなし)</option>
         <option value="wareki">和暦</option>
       </select>
     </label>

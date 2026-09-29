@@ -24,6 +24,21 @@ const inputClass =
   "w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500";
 const labelClass = "text-xs text-slate-500 dark:text-slate-400";
 
+// "YYYY-MM-DD"形式の文字列を年・月・日の数値に分解する(不正な形式ならnull)。
+// 「月日だけで範囲を指定する」モードで、start/end文字列から表示用の年月日を取り出すために使う
+function parseIsoDate(value: string | undefined): { year: number; month: number; day: number } | null {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+}
+
+// 年・月・日の数値から"YYYY-MM-DD"形式の文字列を組み立てる(parseIsoDateの逆方向)
+function formatIsoDate(year: number, month: number, day: number): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${year}-${pad(month)}-${pad(day)}`;
+}
+
 // 選択中の列タイプに応じて、min/max・choicesなどの追加設定フォームを出し分ける。
 // "{ column, onChange, otherTables }: Props"は、Propsの中から3つの値だけを
 // 名前で取り出す書き方(分割代入と呼ぶ。他の言語で言う「引数をまとめて受け取って展開する」に近い)
@@ -141,30 +156,137 @@ export function ColumnTypeFields({ column, onChange, otherTables, precedingColum
         </div>
       );
 
-    case "date":
+    case "date": {
+      const sharedYear = column.date_shared_year ?? false;
+      const startParsed = parseIsoDate(column.start);
+      const endParsed = parseIsoDate(column.end);
+      const year = startParsed?.year ?? new Date().getFullYear();
+      const startMonth = startParsed?.month ?? 1;
+      const startDay = startParsed?.day ?? 1;
+      const endMonth = endParsed?.month ?? 12;
+      const endDay = endParsed?.day ?? 31;
+
+      // 「月日だけで範囲を指定する」モードでは、年・開始月日・終了月日のどれか1つを
+      // 変更するたびに、開始日・終了日の両方をこの関数でまとめて組み立てて1回のonChangeで送る。
+      // set()を2回連続で呼ぶと、片方が古いcolumnを参照したままもう片方を上書きしてしまう
+      // (このコードベースで実際に起きた不具合。詳しくはenum選択肢の追加/削除の修正を参照)
+      const setSharedDates = (y: number, sm: number, sd: number, em: number, ed: number) =>
+        onChange({
+          ...column,
+          date_shared_year: true,
+          start: formatIsoDate(y, sm, sd),
+          end: formatIsoDate(y, em, ed),
+        });
+
       return (
-        <div className="grid grid-cols-2 gap-2">
-          <label className="flex flex-col gap-1">
-            <span className={labelClass}>開始日</span>
+        <div className="space-y-2">
+          <label className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200 cursor-pointer">
             <input
-              type="date"
-              className={inputClass}
-              value={column.start ?? ""}
-              onChange={(e) => set("start", e.target.value)}
+              type="checkbox"
+              checked={sharedYear}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  // 現在の開始日の年を引き継いで、開始・終了とも同じ年に揃える
+                  setSharedDates(year, startMonth, startDay, endMonth, endDay);
+                } else {
+                  onChange({ ...column, date_shared_year: false });
+                }
+              }}
             />
+            月日だけで範囲を指定する(開始・終了で同じ年を使う)
           </label>
-          <label className="flex flex-col gap-1">
-            <span className={labelClass}>終了日</span>
-            <input
-              type="date"
-              className={inputClass}
-              value={column.end ?? ""}
-              onChange={(e) => set("end", e.target.value)}
-            />
-          </label>
+
+          {sharedYear ? (
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-1">
+                <span className={labelClass}>年</span>
+                <input
+                  type="number"
+                  className={inputClass}
+                  value={year}
+                  onChange={(e) => setSharedDates(Number(e.target.value), startMonth, startDay, endMonth, endDay)}
+                />
+              </label>
+              <div />
+              <label className="flex flex-col gap-1">
+                <span className={labelClass}>開始(月)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={12}
+                  className={inputClass}
+                  value={startMonth}
+                  onChange={(e) => setSharedDates(year, Number(e.target.value), startDay, endMonth, endDay)}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className={labelClass}>開始(日)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={31}
+                  className={inputClass}
+                  value={startDay}
+                  onChange={(e) => setSharedDates(year, startMonth, Number(e.target.value), endMonth, endDay)}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className={labelClass}>終了(月)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={12}
+                  className={inputClass}
+                  value={endMonth}
+                  onChange={(e) => setSharedDates(year, startMonth, startDay, Number(e.target.value), endDay)}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className={labelClass}>終了(日)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={31}
+                  className={inputClass}
+                  value={endDay}
+                  onChange={(e) => setSharedDates(year, startMonth, startDay, endMonth, Number(e.target.value))}
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-1">
+                <span className={labelClass}>開始日</span>
+                <input
+                  type="date"
+                  // ダークモードでは何も指定しないとカレンダーアイコンが黒いまま描画され、
+                  // 暗い背景に溶け込んで見えなくなる。dark:[color-scheme:dark]を指定すると、
+                  // ブラウザが日付ピッカーのアイコン等のネイティブ部品をダークモード用の
+                  // 配色(アイコンが白系になる)で描画するようになる
+                  className={`${inputClass} dark:[color-scheme:dark]`}
+                  value={column.start ?? ""}
+                  onChange={(e) => set("start", e.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className={labelClass}>終了日</span>
+                <input
+                  type="date"
+                  // ダークモードでは何も指定しないとカレンダーアイコンが黒いまま描画され、
+                  // 暗い背景に溶け込んで見えなくなる。dark:[color-scheme:dark]を指定すると、
+                  // ブラウザが日付ピッカーのアイコン等のネイティブ部品をダークモード用の
+                  // 配色(アイコンが白系になる)で描画するようになる
+                  className={`${inputClass} dark:[color-scheme:dark]`}
+                  value={column.end ?? ""}
+                  onChange={(e) => set("end", e.target.value)}
+                />
+              </label>
+            </div>
+          )}
           <DateFormatSelect column={column} onChange={onChange} />
         </div>
       );
+    }
 
     case "birth_date":
       return (

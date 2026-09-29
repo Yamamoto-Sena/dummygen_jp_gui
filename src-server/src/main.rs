@@ -15,9 +15,10 @@ use axum::{
 };
 use dummy_data_gen::{
     build_json_text, generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables,
-    reject_foreign_key_in_single_table, resolve_fk_reprs, resolve_foreign_keys, resolve_unique_pools,
-    schema_file_to_yaml, topological_order, write_csv_streaming, write_output_multi_table, write_sql_streaming,
-    write_text, write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
+    prepare_warnings, reject_foreign_key_in_single_table, resolve_fk_reprs, resolve_foreign_keys,
+    resolve_unique_pools, schema_file_to_yaml, topological_order, write_csv_streaming, write_output_multi_table,
+    write_sql_streaming, write_text, write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema,
+    SchemaFile, DEFAULT_CHUNK_SIZE,
 };
 use serde::{Deserialize, Serialize};
 use tower_http::services::ServeDir;
@@ -40,6 +41,9 @@ struct PreviewRequest {
 struct PreviewResult {
     headers: Vec<String>,
     rows: Vec<Vec<Option<String>>>,
+    // src-tauri/src/lib.rsのPreviewResultと同じ意味(prepare_columns/prepare_tablesが
+    // エラーにはしないが気づいた方がよい問題点)
+    warnings: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +64,11 @@ struct GenerateRequestWeb {
     encoding: String,
     seed: Option<u64>,
     quote_all: bool,
+    // trueのとき、CSV出力のdate/birth_date列の値の先頭に半角の'を付ける
+    // (dummy_data_gen側のescape_dates_for_excelと同じ意味。CSV以外の形式には影響しない)。
+    // json_arrayと同じ理由で省略可(省略時false)にしている
+    #[serde(default)]
+    escape_dates_for_excel: bool,
     // trueのとき、JSON出力をファイル全体で1つの配列にする(falseならNDJSON)。JSON以外には影響しない。
     // この項目を追加する前からAPIを使っている呼び出し側を壊さないよう、省略可(省略時false)にしている
     #[serde(default)]
@@ -76,6 +85,9 @@ struct GenerateRequestMultiWeb {
     // trueのとき、CSV出力の全ての値をダブルクォートで囲む(GenerateRequestWeb.quote_allと同じ意味。
     // format以外の形式(sql/json/xlsx)には影響しない。run_generate_multiがそのままwrite_output_multi_tableに渡す)
     quote_all: bool,
+    // GenerateRequestWeb.escape_dates_for_excelと同じ意味(省略時false)
+    #[serde(default)]
+    escape_dates_for_excel: bool,
     // GenerateRequestWeb.json_arrayと同じ意味(省略時false)
     #[serde(default)]
     json_array: bool,
@@ -136,11 +148,12 @@ fn run_preview(request: PreviewRequest) -> Result<PreviewResult, ApiError> {
     // 持っている「foreign_key列は複数テーブル(tables:形式)でしか使えない」検証をここでも行う。
     // 怠ると、参照先が無いままFKプールが埋まらず、生成時に内部矛盾でpanicする
     reject_foreign_key_in_single_table(&columns).map_err(bad_request)?;
+    let warnings = prepare_warnings(&columns);
     let seed = rand::random();
     resolve_unique_pools(&mut columns, schema.row_count, seed);
     let rows = generate_all_rows(schema.row_count, &columns, seed);
 
-    Ok(PreviewResult { headers, rows })
+    Ok(PreviewResult { headers, rows, warnings })
 }
 
 async fn preview(Json(request): Json<PreviewRequest>) -> Result<Json<PreviewResult>, ApiError> {
@@ -163,6 +176,9 @@ fn run_preview_multi(request: PreviewRequestMulti) -> Result<Vec<PreviewResult>,
 
     let schema_file = SchemaFile { tables: sample_tables, multi_table: true };
     let mut tables = prepare_tables(&schema_file).map_err(bad_request)?;
+    // prepare_warningsはテーブルごとの列一覧しか見ないため、resolve_foreign_keys等で
+    // 他テーブルとの依存関係を解決する前のこの時点で先に集めておいてよい
+    let warnings_by_table: Vec<Vec<String>> = tables.iter().map(|t| prepare_warnings(&t.columns)).collect();
     let (deps, referenced) = resolve_foreign_keys(&mut tables).map_err(bad_request)?;
     let order = topological_order(&deps, &tables).map_err(bad_request)?;
     resolve_fk_reprs(&mut tables, &order).map_err(bad_request)?;
@@ -174,7 +190,11 @@ fn run_preview_multi(request: PreviewRequestMulti) -> Result<Vec<PreviewResult>,
     Ok(headers_by_table
         .into_iter()
         .enumerate()
-        .map(|(i, headers)| PreviewResult { headers, rows: rows_by_table[i].clone().unwrap_or_default() })
+        .map(|(i, headers)| PreviewResult {
+            headers,
+            rows: rows_by_table[i].clone().unwrap_or_default(),
+            warnings: warnings_by_table[i].clone(),
+        })
         .collect())
 }
 
@@ -244,6 +264,7 @@ fn run_generate(request: GenerateRequestWeb, output_path: &str) -> Result<(), Ap
             DEFAULT_CHUNK_SIZE,
             true,
             request.quote_all,
+            request.escape_dates_for_excel,
             |_, _| {},
         ),
         "sql" => {
@@ -354,7 +375,15 @@ fn run_generate_multi(request: GenerateRequestMultiWeb, output_base_path: &str) 
         other => return Err(bad_request(format!("複数テーブルでは未対応の出力形式です: {other}"))),
     };
 
-    write_output_multi_table(format, &generated, output_base_path, encoding, request.quote_all, request.json_array)
+    write_output_multi_table(
+        format,
+        &generated,
+        output_base_path,
+        encoding,
+        request.quote_all,
+        request.escape_dates_for_excel,
+        request.json_array,
+    )
         .map_err(internal_error)
 }
 
@@ -524,6 +553,7 @@ mod tests {
             encoding: "utf8".to_string(),
             seed: Some(1),
             quote_all: false,
+            escape_dates_for_excel: false,
             json_array: false,
             file_name: None,
         };
@@ -543,6 +573,7 @@ mod tests {
             encoding: "utf8".to_string(),
             seed: Some(1),
             quote_all: false,
+            escape_dates_for_excel: false,
             json_array: false,
             file_name: None,
         };
@@ -562,6 +593,7 @@ mod tests {
             encoding: "utf8".to_string(),
             seed: None,
             quote_all: false,
+            escape_dates_for_excel: false,
             json_array: false,
             file_name: None,
         };
@@ -578,6 +610,7 @@ mod tests {
             encoding: "utf8".to_string(),
             seed: Some(42),
             quote_all: false,
+            escape_dates_for_excel: false,
             json_array: false,
         };
         let base_path = temp_path("generate_multi_test.csv");
@@ -607,6 +640,7 @@ mod tests {
             encoding: "utf8".to_string(),
             seed: Some(42),
             quote_all: true,
+            escape_dates_for_excel: false,
             json_array: false,
         };
         let base_path = temp_path("generate_multi_quote_all_test.csv");

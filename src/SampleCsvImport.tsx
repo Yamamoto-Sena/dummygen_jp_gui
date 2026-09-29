@@ -26,9 +26,120 @@ async function readCsvText(file: File): Promise<string> {
   }
 }
 
-// サンプルCSVを読み込み、1行目を列名、各列の値を選択肢(choices)の候補として
-// カラム設定に反映する機能。読み込んだCSVの中身はブラウザのメモリ上でのみ扱い、
-// 外部への送信・保存はしない
+// 列名(ヘッダー)の文字列だけから、対応する列タイプを推測するための対応表。
+// 上から順に調べ、最初に一致したものを採用する(「電話」より前に「固定電話」を
+// 置く、といった具合に、より具体的なキーワードを先に置く必要がある)。
+// ここでの判定はヘッダーの文字列だけを見ており、実際のセルの値は一切見ない
+// (値を見て推測する方式だと、本物の顧客データの中身をこのツールが「見た」ことに
+// なってしまうため、ヘッダー名だけで判断できる範囲にとどめている)。
+// 一致した列は、その型のnewColumn(...)が用意する既定値(date列の既定の日付範囲、
+// birth_date列の既定の年齢範囲など)をそのまま使う。実データの値は使わないため、
+// 既定値が実際のデータの分布と合うとは限らない(その場合は生成後に手で調整する想定)
+const HEADER_TYPE_RULES: { keywords?: string[]; suffixes?: string[]; type: string }[] = [
+  { keywords: ["フリガナ", "ふりがな", "カナ", "kana"], type: "katakana_name" },
+  { keywords: ["固定電話", "landline"], type: "phone_ja_landline" },
+  { keywords: ["携帯", "電話", "tel", "phone", "mobile"], type: "phone_ja" },
+  { keywords: ["郵便番号", "郵便", "zip", "postal"], type: "postal_code" },
+  { keywords: ["都道府県", "prefecture"], type: "prefecture_ja" },
+  { keywords: ["市区町村", "市町村", "city"], type: "city_ja" },
+  { keywords: ["住所", "address"], type: "address_ja" },
+  { keywords: ["メール", "mail", "email"], type: "email" },
+  { keywords: ["会社名", "企業名", "法人名", "勤務先", "company"], type: "company_name_ja" },
+  { keywords: ["部署", "部門", "department"], type: "department_ja" },
+  { keywords: ["役職", "肩書", "job title", "position"], type: "job_title_ja" },
+  { keywords: ["生年月日", "誕生日", "birthday", "birth date", "birth_date"], type: "birth_date" },
+  { keywords: ["血液型", "blood type"], type: "blood_type" },
+  { keywords: ["性別", "gender", "sex"], type: "gender" },
+  // "名前"は日本語では「フルネーム」の意味で使われることが多いため、first_name(名のみ)
+  // ではなくname_ja(フルネーム)に寄せている
+  { keywords: ["氏名", "フルネーム", "full name", "名前"], type: "name_ja" },
+  { keywords: ["姓", "苗字", "名字", "last name", "surname"], type: "last_name_ja" },
+  // 英語ヘッダーに限定しているのは、日本語の「名」は「氏名」等の一部としても
+  // 出現しやすく単独のキーワードにすると誤判定しやすいため
+  { keywords: ["first name", "given name", "firstname"], type: "first_name_ja" },
+  { keywords: ["日付", "date"], type: "date" },
+  // 「学習日」「登録日」「訪問日」のように、日本語では日付を表す列名の末尾が「日」に
+  // なることが非常に多い(逆に「日」で終わって日付以外を表す列名はほぼ無い)。個別の
+  // キーワードを列挙しきるより、末尾一致で広く拾った方が漏れが少ない
+  { suffixes: ["日"], type: "date" },
+  { keywords: ["会員番号", "注文番号", "伝票番号", "番号", "no."], type: "sequence" },
+];
+
+// ヘッダー名(列名)の文字列だけを見て、上のHEADER_TYPE_RULESに一致する列タイプが
+// あればそのidを返す。無ければnull(呼び出し側がマスキングされたenumにフォールバックする)
+function detectColumnTypeFromHeader(header: string): string | null {
+  const normalized = header.trim().toLowerCase();
+  if (normalized === "") return null;
+  for (const rule of HEADER_TYPE_RULES) {
+    const matches =
+      rule.keywords?.some((keyword) => normalized.includes(keyword.toLowerCase())) ||
+      rule.suffixes?.some((suffix) => normalized.endsWith(suffix.toLowerCase()));
+    if (matches) return rule.type;
+  }
+  return null;
+}
+
+// 整数・小数だけで構成された列かどうかを判定する結果
+type NumericColumnShape =
+  | { kind: "integer"; min: number; max: number }
+  | { kind: "float"; min: number; max: number; decimals: number };
+
+// "123"や"-4.5"のような、符号+数字+小数点だけの文字列かどうか(桁区切りのカンマや
+// 通貨記号が入っているものは対象外。そういう値は後述の「ほとんど数字」判定でのみ無視される)
+const PLAIN_NUMBER_PATTERN = /^-?\d+(\.\d+)?$/;
+
+// 実データの列は、集計行(「合計」等)や空欄代わりの記号("-"等)が数件だけ混ざっていることが
+// よくある。1件でも数字以外があれば列全体を文字列のマスキングenumに倒してしまうと、実際には
+// user_idのような普通の整数列まで巻き添えで文字列化されてしまう。そこで「大部分(9割以上)が
+// 数字なら整数/小数の列とみなし、数字でない少数の値だけ無視する」という多数決の判定にする
+const NUMERIC_SHAPE_MIN_MATCH_RATIO = 0.9;
+
+// ヘッダー名だけでは列タイプを判断できなかった列について、実際の値の大部分が数字だけの
+// 形をしているかを見て、整数/小数の列として復元する(「金額」「数量」のようにヘッダーの
+// キーワードには無いが明らかに数値の列を、文字列のマスキングenumに落としてしまわない
+// ようにするため)。数字でない値がNUMERIC_SHAPE_MIN_MATCH_RATIO未満しか無ければ、
+// それらは集計行等のノイズとみなして無視し、数字だった値だけでmin/maxを計算する。
+// 数字でない値が多すぎる(9割未満しか数字でない)場合はnull(呼び出し側がマスキングされた
+// enumにフォールバックする)。
+// ここでは実際の値の中身を見るが、個々の値そのものはColumnConfigに一切残さない。
+// 使うのは「最小値・最大値の範囲」「小数点以下の最大桁数」という集計結果だけで、これは
+// 個人の識別につながる情報ではない(ちょうど手書きのschema.yamlでintegerのmin/maxを
+// 指定するのと同じ抽象度の情報)
+function detectNumericColumnShape(values: string[]): NumericColumnShape | null {
+  if (values.length === 0) return null;
+
+  let isFloat = false;
+  let maxDecimals = 0;
+  const numbers: number[] = [];
+  for (const value of values) {
+    if (!PLAIN_NUMBER_PATTERN.test(value)) continue; // 数字以外の値は(集計行等のノイズとして)読み飛ばす
+    numbers.push(Number(value));
+    const dotIndex = value.indexOf(".");
+    if (dotIndex !== -1) {
+      isFloat = true;
+      maxDecimals = Math.max(maxDecimals, value.length - dotIndex - 1);
+    }
+  }
+  if (numbers.length === 0 || numbers.length / values.length < NUMERIC_SHAPE_MIN_MATCH_RATIO) return null;
+
+  const min = Math.min(...numbers);
+  const max = Math.max(...numbers);
+  return isFloat ? { kind: "float", min, max, decimals: maxDecimals } : { kind: "integer", min, max };
+}
+
+// サンプルCSVを読み込み、1行目(ヘッダー)からできるだけ適切な列タイプへ自動変換する機能。
+// 読み込んだCSVの中身はブラウザのメモリ上でのみ扱い、外部への送信・保存はしない。
+// マスキング: 本物の顧客データ等が入ったCSVを取り込むケースを考慮し、実際のセルの
+// 値そのものは選択肢や固定範囲に一切残さない。列タイプは次の優先順で決める。
+//   1. ヘッダーの文字列だけで判断できるもの(詳しくはHEADER_TYPE_RULES/
+//      detectColumnTypeFromHeaderのコメントを参照。実際の値は一切見ない)
+//   2. ヘッダーからは判断できないが、値の大部分(9割以上)が数字の形をしているもの
+//      (detectNumericColumnShape。「金額」「数量」「user_id」のような列が、合計行や
+//      空欄代わりの記号がごく一部混ざっただけでマスキングにより文字列化され、元が数値だった
+//      という情報が失われてしまうのを防ぐ。使うのは最小値・最大値・小数桁数という集計結果だけ)
+//   3. どちらでもない列は、フォールバックとして「値の種類数」だけを数え、"A_1"/"A_2"/...
+//      という仮の値に置き換えたenum(カスタム選択肢)にする(実データが3種類あれば
+//      ["A_1","A_2","A_3"]になる)
 export function SampleCsvImport({ columns, onImport }: Props) {
   // useRef(null)は「画面が再描画されても値を覚えておける入れ物」を作るReactの仕組みで、
   // ここでは実際の<input type="file">のDOM要素(画面上の部品そのもの)への参照を保持する。
@@ -54,21 +165,43 @@ export function SampleCsvImport({ columns, onImport }: Props) {
 
     // header(列名の一覧)を1つずつ処理して、対応するColumnConfigの一覧を作る
     const imported: ColumnConfig[] = header.map((rawName, colIndex) => {
-      // Set<string>は「同じ値を2回以上持てない」集合。ここでは「もう選択肢として
-      // 拾った値」を覚えておき、同じ値を2回選択肢に入れないようにするために使う
-      const seen = new Set<string>();
+      const name = rawName.trim() || `column${colIndex + 1}`;
+
+      // まずヘッダーの文字列だけで列タイプを推測する。一致すれば、その列タイプの
+      // newColumn(...)が用意する既定値をそのまま使う(実データの値は一切見ない)
+      const detectedType = detectColumnTypeFromHeader(rawName);
+      if (detectedType) {
+        return newColumn(name, detectedType);
+      }
+
+      // この列の、空でない値だけを集めておく(以降の数値判定・マスキングの両方で使う)
       const values: string[] = [];
       for (const row of scanned) {
         const value = (row[colIndex] ?? "").trim();
-        if (value === "" || seen.has(value)) continue;
-        seen.add(value);
-        values.push(value);
-        if (values.length >= MAX_CHOICES_PER_COLUMN) break;
+        if (value !== "") values.push(value);
       }
-      const column = newColumn(rawName.trim() || `column${colIndex + 1}`, "enum");
-      // 実際に値が見つかっていればそれをchoicesにし、1つも見つからなければ
-      // (空列だった場合)newColumnが用意したデフォルトの選択肢のままにする
-      return { ...column, choices: values.length > 0 ? values : column.choices };
+
+      // ヘッダーからは判断できなかったが、値が全て数字の形をしていれば整数/小数の列として
+      // 復元する(「金額」「数量」のようにヘッダーのキーワードに無い数値列が、次のenum
+      // マスキングで文字列化されてしまい「元は数値だった」という情報が失われるのを防ぐ)
+      const numericShape = detectNumericColumnShape(values);
+      if (numericShape) {
+        const column = newColumn(name, numericShape.kind);
+        return numericShape.kind === "integer"
+          ? { ...column, min: numericShape.min, max: numericShape.max }
+          : { ...column, min: numericShape.min, max: numericShape.max, decimals: numericShape.decimals };
+      }
+
+      // 数値でもなければ、フォールバックとして「値の種類数」だけを数えたマスキング済み
+      // enumにする。Set<string>は「同じ値を2回以上持てない」集合で、ここでは重複を除いた
+      // 種類数を数えるためだけに使う(中身の値自体はchoicesに一切含めない)
+      const distinctCount = Math.min(new Set(values).size, MAX_CHOICES_PER_COLUMN);
+      const column = newColumn(name, "enum");
+      // 実データの値そのものではなく、見つかった値の種類数ぶんだけ"A_1"/"A_2"/...という
+      // 仮の選択肢を作る(マスキング)。1つも見つからなければ(空列だった場合)newColumnが
+      // 用意したデフォルトの選択肢のままにする
+      const maskedChoices = Array.from({ length: distinctCount }, (_, i) => `A_${i + 1}`);
+      return { ...column, choices: distinctCount > 0 ? maskedChoices : column.choices };
     });
 
     if (columns.length > 0) {
@@ -94,7 +227,7 @@ export function SampleCsvImport({ columns, onImport }: Props) {
           className="flex items-center gap-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1 text-xs text-slate-700 dark:text-slate-200 hover:border-cyan-500 hover:text-cyan-600 dark:hover:text-cyan-400 transition cursor-pointer"
         >
           <Upload className="w-3.5 h-3.5" />
-          サンプルCSVから列・選択肢を読み込む
+          サンプルCSVから列を自動判定して読み込む
         </button>
         <input
           ref={fileInputRef}
@@ -108,6 +241,9 @@ export function SampleCsvImport({ columns, onImport }: Props) {
           }}
         />
       </div>
+      <p className="text-[11px] text-slate-400 dark:text-slate-500">
+列名(氏名・メールアドレス・住所など)から列タイプを自動判定します。判定できなかった列のうち、値の9割以上が数字の列は範囲(最小値・最大値)を保った整数/小数として(合計行等ごく一部の非数値は無視します)、それ以外は「値の種類数」だけを読み取ってA_1/A_2/...という仮の値に置き換えます。いずれもセルの値そのものは一切使いません
+      </p>
     </div>
   );
 }

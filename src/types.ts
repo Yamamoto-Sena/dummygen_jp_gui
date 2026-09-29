@@ -136,6 +136,10 @@ export interface ColumnConfig {
   // date
   start?: string;
   end?: string;
+  // date。trueのとき「月日だけで範囲を指定する」入力モードを表示する(開始・終了で同じ年を使う)。
+  // 実際に生成に使われるのは今まで通りstart/endの文字列で、このフィールドはGUIの表示切り替えにしか
+  // 使わない(Rust側はこのフィールドを参照しない。未指定/falseのときは今まで通りの日付入力欄になる)
+  date_shared_year?: boolean;
   // date / birth_date
   format?: DateFormat;
   // birth_date
@@ -237,6 +241,38 @@ export function inferDefaultValueCategory(
   }
 }
 
+const DATA_TYPE_PRESETS_TEXT = [
+  { label: "文字列 (VARCHAR(100))", value: "VARCHAR(100)" },
+  { label: "文字列 (TEXT)", value: "TEXT" },
+];
+const DATA_TYPE_PRESETS_INTEGER = [
+  { label: "整数 (INTEGER)", value: "INTEGER" },
+  { label: "整数 (BIGINT)", value: "BIGINT" },
+];
+const DATA_TYPE_PRESETS_FLOAT = [
+  { label: "小数 (DECIMAL(10,2))", value: "DECIMAL(10,2)" },
+  { label: "小数 (FLOAT)", value: "FLOAT" },
+];
+const DATA_TYPE_PRESETS_BOOLEAN = [{ label: "真偽値 (BOOLEAN)", value: "BOOLEAN" }];
+
+// ColumnRow.tsxの「データの型」欄で、実際にそのカラムが今生成している値の種類(category)と
+// 一致する候補だけをプルダウンに出すためのヘルパー。「整数の列に文字列を入れることはできない」
+// のように、そもそも噛み合わない型は選択肢自体に出さない。categoryは呼び出し側で
+// inferDefaultValueCategory(...)を使って求める(「現在の型」表示と同じ判定を再利用するだけで、
+// ここで判定ロジックを重複して持たない)
+export function dataTypePresetsForCategory(category: ValueCategory): { label: string; value: string }[] {
+  switch (category) {
+    case "text":
+      return DATA_TYPE_PRESETS_TEXT;
+    case "integer":
+      return DATA_TYPE_PRESETS_INTEGER;
+    case "float":
+      return DATA_TYPE_PRESETS_FLOAT;
+    case "boolean":
+      return DATA_TYPE_PRESETS_BOOLEAN;
+  }
+}
+
 // GUI画面上の「テーブル1個分」の単位。複数テーブル対応(外部キー)のために、
 // 列設定(columns)に加えてテーブル名・生成件数もここに持たせている。
 // idはGUI内部でのタブ識別・React key専用で、Rust側には送らない(YAML化もしない)
@@ -317,6 +353,9 @@ export type OutputFormat = "csv" | "sql" | "json" | "xlsx";
 export interface PreviewResult {
   headers: string[];
   rows: (string | null)[][];
+  // prepare_columns/prepare_tables(Rust側)がエラーにはしないが気づいた方がよい問題点
+  // (例: 明らかに数値化できない列タイプにデータの型でINTEGER等を指定している等)
+  warnings: string[];
 }
 
 export interface GenerateRequest {
@@ -329,6 +368,10 @@ export interface GenerateRequest {
   output_path: string;
   // trueのとき、CSV出力の全ての値をダブルクォートで囲む。SQL出力には影響しない
   quote_all: boolean;
+  // trueのとき、CSV出力のdate/birth_date列の値の先頭に半角の'を付ける。Excelでこの
+  // CSVをダブルクリックして開いたときに日付として誤認識され、列幅の関係で一部の行だけ
+  // "####"と表示されてしまう問題を避けるためのオプション。CSV以外の形式には影響しない
+  escape_dates_for_excel: boolean;
   // trueのとき、JSON出力をファイル全体で1つの配列([{...},{...}])にする。falseならNDJSON(1行1件)。JSON以外には影響しない
   json_array: boolean;
 }

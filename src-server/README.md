@@ -104,6 +104,7 @@ curl http://localhost:3000/api/health
 | `encoding` | `"utf8"` \| `"sjis"` | ○ | 文字コード(xlsxのときは無視される) |
 | `seed` | number | - | 乱数シード。省略時は毎回ランダム |
 | `quote_all` | boolean | ○ | CSVの全ての値を`""`で囲むか(CSV以外では無視される) |
+| `escape_dates_for_excel` | boolean | - | `true`でCSVのdate/birth_date列の値の先頭に半角の`'`を付ける。ExcelでこのCSVをダブルクリックして開いたときに日付として誤認識され、列幅の関係で一部の行だけ`"####"`と表示されてしまう問題を避けるためのオプション(CSV以外では無視される)。省略時は`false` |
 | `json_array` | boolean | - | `true`でJSONをファイル全体で1つの配列(`[{...},{...}]`)にする。省略時・`false`は1行1件のNDJSON(JSON以外では無視される) |
 | `file_name` | string | - | ダウンロード時のファイル名の候補。省略時は`output.csv`等 |
 
@@ -127,6 +128,7 @@ curl -X POST http://localhost:3000/api/generate \
 | `encoding` | `"utf8"` \| `"sjis"` | ○ | 文字コード(xlsxのときは無視される) |
 | `seed` | number | - | 乱数シード |
 | `quote_all` | boolean | ○ | CSVの全ての値を`""`で囲むか(CSV以外では無視される) |
+| `escape_dates_for_excel` | boolean | - | `true`でCSVのdate/birth_date列の値の先頭に半角の`'`を付ける。ExcelでこのCSVをダブルクリックして開いたときに日付として誤認識され、列幅の関係で一部の行だけ`"####"`と表示されてしまう問題を避けるためのオプション(CSV以外では無視される)。省略時は`false` |
 | `json_array` | boolean | - | `true`でJSONをファイル全体で1つの配列(`[{...},{...}]`)にする。省略時・`false`は1行1件のNDJSON(JSON以外では無視される) |
 
 レスポンス(`200 OK`): ファイルが1個だけ(SQL、またはExcel、またはCSV/JSONでテーブルが1個)ならそのファイル、CSV/JSONで複数テーブル(ファイルが2個以上)ならそれらをまとめた`output.zip`(`Content-Type: application/zip`)。

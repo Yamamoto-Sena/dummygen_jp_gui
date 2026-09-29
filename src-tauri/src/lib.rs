@@ -7,9 +7,10 @@
 // 提供する`src-server`にも、ほぼ同じ処理をHTTPハンドラの形で書いた対応物がある。
 use dummy_data_gen::{
     build_json_text, generate_all_rows, generate_multi_table_rows, load_schema, prepare_columns, prepare_tables,
-    reject_foreign_key_in_single_table, resolve_fk_reprs, resolve_foreign_keys, resolve_unique_pools,
-    schema_file_to_yaml, topological_order, write_csv_streaming, write_output_multi_table, write_sql_streaming,
-    write_text, write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema, SchemaFile, DEFAULT_CHUNK_SIZE,
+    prepare_warnings, reject_foreign_key_in_single_table, resolve_fk_reprs, resolve_foreign_keys,
+    resolve_unique_pools, schema_file_to_yaml, topological_order, write_csv_streaming, write_output_multi_table,
+    write_sql_streaming, write_text, write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema,
+    SchemaFile, DEFAULT_CHUNK_SIZE,
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -57,6 +58,11 @@ struct GenerateRequest {
     // trueのとき、CSV出力の全ての値をダブルクォートで囲む(名称にスペースを含む
     // ケースなどで値の区切りを明確にしたい場合向け)。SQL出力には影響しない
     quote_all: bool,
+    // trueのとき、CSV出力のdate/birth_date列の値の先頭に半角の'を付ける。Excelでこの
+    // CSVをダブルクリックして開いたときに日付として誤変換され、列幅が足りない行だけ
+    // "####"と表示されてしまう問題を避けるためのオプション(dummy_data_gen側の
+    // write_csv_streamingのescape_dates_for_excelと同じ意味)。CSV以外の形式には影響しない
+    escape_dates_for_excel: bool,
     // trueのとき、JSON出力をファイル全体で1つの配列にする(falseならNDJSON)。JSON以外には影響しない
     json_array: bool,
 }
@@ -71,6 +77,11 @@ struct PreviewRequest {
 struct PreviewResult {
     headers: Vec<String>,
     rows: Vec<Vec<Option<String>>>,
+    // prepare_columns/prepare_tablesがエラーにはしないが気づいた方がよい問題点
+    // (例: 明らかに数値化できない列タイプにdata_typeでINTEGER等を指定している等)。
+    // CLIはeprintln!で表示するだけだが、GUIには表示先の標準エラー出力が無い(Tauriの
+    // コマンド境界を越えて拾う仕組みが無い)ため、こうして戻り値に含めて画面に表示する
+    warnings: Vec<String>,
 }
 
 // 複数テーブル(外部キーで関連付けられたテーブルが2個以上)のとき用のリクエスト。
@@ -87,6 +98,9 @@ struct GenerateRequestMulti {
     // trueのとき、CSV出力の全ての値をダブルクォートで囲む(単一テーブルのGenerateRequestと同じ意味。
     // format以外の形式には影響しない)
     quote_all: bool,
+    // trueのとき、CSV出力のdate/birth_date列の値の先頭に半角の'を付ける
+    // (単一テーブルのGenerateRequestと同じ意味。CSV以外の形式には影響しない)
+    escape_dates_for_excel: bool,
     // trueのとき、JSON出力をテーブルごとに1つの配列にする(単一テーブルのGenerateRequestと同じ意味)
     json_array: bool,
 }
@@ -120,11 +134,12 @@ fn preview_dummy_data(request: PreviewRequest) -> Result<PreviewResult, String> 
         // 持っている「foreign_key列は複数テーブル(tables:形式)でしか使えない」検証をここでも行う。
         // 怠ると、参照先が無いままFKプールが埋まらず、生成時に内部矛盾でpanicする
         reject_foreign_key_in_single_table(&columns).map_err(|e| e.to_string())?;
+        let warnings = prepare_warnings(&columns);
         let seed = rand::random();
         resolve_unique_pools(&mut columns, schema.row_count, seed);
         let rows = generate_all_rows(schema.row_count, &columns, seed);
 
-        Ok(PreviewResult { headers, rows })
+        Ok(PreviewResult { headers, rows, warnings })
     })
 }
 
@@ -158,6 +173,9 @@ fn preview_dummy_data_multi(request: PreviewRequestMulti) -> Result<Vec<PreviewR
 
         let schema_file = SchemaFile { tables: sample_tables, multi_table: true };
         let mut tables = prepare_tables(&schema_file).map_err(|e| e.to_string())?;
+        // prepare_warningsはテーブルごとの列一覧しか見ないため、resolve_foreign_keys等で
+        // 他テーブルとの依存関係を解決する前のこの時点で先に集めておいてよい
+        let warnings_by_table: Vec<Vec<String>> = tables.iter().map(|t| prepare_warnings(&t.columns)).collect();
         let (deps, referenced) = resolve_foreign_keys(&mut tables).map_err(|e| e.to_string())?;
         let order = topological_order(&deps, &tables).map_err(|e| e.to_string())?;
         resolve_fk_reprs(&mut tables, &order).map_err(|e| e.to_string())?;
@@ -174,7 +192,11 @@ fn preview_dummy_data_multi(request: PreviewRequestMulti) -> Result<Vec<PreviewR
         Ok(headers_by_table
             .into_iter()
             .enumerate()
-            .map(|(i, headers)| PreviewResult { headers, rows: rows_by_table[i].clone().unwrap_or_default() })
+            .map(|(i, headers)| PreviewResult {
+                headers,
+                rows: rows_by_table[i].clone().unwrap_or_default(),
+                warnings: warnings_by_table[i].clone(),
+            })
             .collect())
     })
 }
@@ -302,6 +324,7 @@ fn generate_dummy_data(app: tauri::AppHandle, request: GenerateRequest) -> Resul
                 DEFAULT_CHUNK_SIZE,
                 true,
                 request.quote_all,
+                request.escape_dates_for_excel,
                 on_progress,
             ),
             "sql" => {
@@ -364,6 +387,7 @@ fn run_generate_multi(
     seed: Option<u64>,
     output_path: &str,
     quote_all: bool,
+    escape_dates_for_excel: bool,
     json_array: bool,
     mut on_table_start: impl FnMut(usize, &dummy_data_gen::PreparedTable),
 ) -> Result<(), String> {
@@ -424,7 +448,7 @@ fn run_generate_multi(
             other => return Err(format!("複数テーブルでは未対応の出力形式です: {other}")),
         };
 
-        write_output_multi_table(format, &generated, output_path, encoding, quote_all, json_array)
+        write_output_multi_table(format, &generated, output_path, encoding, quote_all, escape_dates_for_excel, json_array)
             .map_err(|e| e.to_string())?;
         Ok(())
     })
@@ -448,6 +472,7 @@ fn generate_dummy_data_multi(app: tauri::AppHandle, request: GenerateRequestMult
         request.seed,
         &request.output_path,
         request.quote_all,
+        request.escape_dates_for_excel,
         request.json_array,
         move |_idx, _table| {
             let _ =
@@ -566,6 +591,7 @@ mod tests {
             base_path.to_str().unwrap(),
             false,
             false,
+            false,
             |_, _| {},
         )
         .err()
@@ -587,6 +613,7 @@ mod tests {
             "encoding": "utf8",
             "output_path": "dummy.csv",
             "quote_all": false,
+            "escape_dates_for_excel": false,
             "json_array": false
         }))
         .unwrap();
@@ -610,6 +637,7 @@ mod tests {
             "utf8",
             Some(42),
             base_path.to_str().unwrap(),
+            false,
             false,
             false,
             |_idx, table| started_tables.push(table.name.clone().unwrap_or_default()),
@@ -651,6 +679,7 @@ mod tests {
             base_path.to_str().unwrap(),
             false,
             false,
+            false,
             |_, _| {},
         )
         .expect("xlsx形式での複数テーブル生成に失敗した");
@@ -675,6 +704,7 @@ mod tests {
             "utf8",
             Some(42),
             base_path.to_str().unwrap(),
+            false,
             false,
             false,
             |_, _| {},
@@ -707,6 +737,7 @@ mod tests {
             Some(42),
             base_path.to_str().unwrap(),
             false,
+            false,
             true,
             |_, _| {},
         )
@@ -737,12 +768,51 @@ mod tests {
             base_path.to_str().unwrap(),
             true,
             false,
+            false,
             |_, _| {},
         )
         .expect("複数テーブルの生成に失敗した");
 
         let users_csv = std::fs::read_to_string(dir.join("multi_test_out_users.csv")).unwrap();
         assert!(users_csv.lines().next().unwrap().starts_with('"'), "ヘッダー行がダブルクォートで囲まれていない");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 複数テーブルのCSV出力でもescape_dates_for_excel: trueが効いて、date列の値の先頭に
+    // 半角の'が付くことを確認する(単一テーブルの経路はdummy_data_gen側のテストでカバー済みなので、
+    // ここではGUIのこの複数テーブル経路にちゃんと引数が伝わっていることだけ確認すれば十分)
+    #[test]
+    fn run_generate_multi_csv_with_escape_dates_for_excel_true_prefixes_date_columns() {
+        let dir = std::env::temp_dir().join(format!("dummygen_jp_gui_escape_dates_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base_path = dir.join("multi_test_out.csv");
+
+        let schema_with_date: Schema = serde_json::from_value(serde_json::json!({
+            "row_count": 1,
+            "table_name": "orders",
+            "columns": [
+                { "name": "id", "type": "sequence" },
+                { "name": "paid_at", "type": "date", "start": "2024-01-05", "end": "2024-01-05" }
+            ]
+        }))
+        .unwrap();
+
+        run_generate_multi(
+            vec![schema_with_date],
+            "csv",
+            "utf8",
+            Some(42),
+            base_path.to_str().unwrap(),
+            false,
+            true,
+            false,
+            |_, _| {},
+        )
+        .expect("複数テーブルの生成に失敗した");
+
+        let orders_csv = std::fs::read_to_string(dir.join("multi_test_out_orders.csv")).unwrap();
+        assert_eq!(orders_csv, "id,paid_at\n1,'2024-01-05\n");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

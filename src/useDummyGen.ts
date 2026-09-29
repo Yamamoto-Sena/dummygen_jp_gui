@@ -140,6 +140,7 @@ export function useDummyGen() {
       encoding: OutputEncoding,
       outputPath: string,
       quoteAll: boolean,
+      escapeDatesForExcel: boolean,
       jsonArray: boolean,
     ) => {
       setError(null);
@@ -148,7 +149,15 @@ export function useDummyGen() {
       try {
         if (isTauriRuntime()) {
           await invoke("generate_dummy_data_multi", {
-            request: { tables, format, encoding, output_path: outputPath, quote_all: quoteAll, json_array: jsonArray },
+            request: {
+              tables,
+              format,
+              encoding,
+              output_path: outputPath,
+              quote_all: quoteAll,
+              escape_dates_for_excel: escapeDatesForExcel,
+              json_array: jsonArray,
+            },
           });
         } else {
           const res = await apiPost("/api/generate_multi", {
@@ -156,6 +165,7 @@ export function useDummyGen() {
             format,
             encoding,
             quote_all: quoteAll,
+            escape_dates_for_excel: escapeDatesForExcel,
             json_array: jsonArray,
           });
           const blob = await res.blob();

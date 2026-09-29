@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp, Copy, GripVertical, Trash2 } from "lucide-react";
 import {
   COLUMN_TYPES,
+  dataTypePresetsForCategory,
   GROUP_COLORS,
   inferDefaultValueCategory,
   newColumn,
@@ -83,7 +84,13 @@ export function ColumnRow({
       }}
       className={`rounded-lg border border-slate-200 dark:border-slate-800 ${colors ? `border-l-4 ${colors.border}` : ""} bg-white dark:bg-slate-900/60 p-3 space-y-3 transition ${isDragging ? "opacity-40" : ""}`}
     >
-      <div className="flex items-center gap-2">
+      {/* 列名(自由入力で長さが伸びる)・型プルダウン(固定幅)・移動/複製/削除ボタンを1行に
+          並べているが、列名を長く入力すると合計の最小幅が行の枠を超えてしまい、右端の
+          複製・削除ボタンが枠外にはみ出して押せなくなる不具合があった。flex-wrapを許可し、
+          移動/複製/削除ボタンを1つのshrink-0グループにまとめることで、入りきらないときは
+          ボタン一式がまとめて次の行に折り返されるようにした(個々のボタンがバラバラに
+          折り返されると並び順が分かりにくくなるため、まとめて1グループとして扱う) */}
+      <div className="flex flex-wrap items-center gap-2">
         <span
           draggable
           onDragStart={onDragStart}
@@ -123,18 +130,20 @@ export function ColumnRow({
             </optgroup>
           ))}
         </select>
-        <button type="button" className={iconButtonClass} onClick={onMoveUp} disabled={!canMoveUp} title="上へ">
-          <ChevronUp className="w-4 h-4" />
-        </button>
-        <button type="button" className={iconButtonClass} onClick={onMoveDown} disabled={!canMoveDown} title="下へ">
-          <ChevronDown className="w-4 h-4" />
-        </button>
-        <button type="button" className={iconButtonClass} onClick={onDuplicate} title="複製">
-          <Copy className="w-4 h-4" />
-        </button>
-        <button type="button" className={iconButtonClass} onClick={onRemove} title="削除">
-          <Trash2 className="w-4 h-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button type="button" className={iconButtonClass} onClick={onMoveUp} disabled={!canMoveUp} title="上へ">
+            <ChevronUp className="w-4 h-4" />
+          </button>
+          <button type="button" className={iconButtonClass} onClick={onMoveDown} disabled={!canMoveDown} title="下へ">
+            <ChevronDown className="w-4 h-4" />
+          </button>
+          <button type="button" className={iconButtonClass} onClick={onDuplicate} title="複製">
+            <Copy className="w-4 h-4" />
+          </button>
+          <button type="button" className={iconButtonClass} onClick={onRemove} title="削除">
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       <ColumnTypeFields column={column} onChange={onChange} otherTables={otherTables} precedingColumns={precedingColumns} />
@@ -188,6 +197,25 @@ export function ColumnRow({
           value={column.data_type ?? ""}
           onChange={(e) => onChange({ ...column, data_type: e.target.value || undefined })}
         />
+        {/* この列が実際に生成する値の種類(category)と噛み合う型だけを選べるクイック入力用の
+            プルダウン。例えば整数の値しか作らない列には「文字列」「真偽値」は出さない(そもそも
+            入れられないため)。選ぶと上のテキスト欄にその値を入れるだけで、入れた後も自由に
+            書き換えられる(VARCHARの桁数など、プリセットに無い細かい指定をしたい場合のため、
+            テキスト欄自体は残してある)。選択後は毎回プレースホルダーに戻す */}
+        <select
+          className={`${inputClass} w-40 !w-40 shrink-0`}
+          value=""
+          onChange={(e) => {
+            if (e.target.value) onChange({ ...column, data_type: e.target.value });
+          }}
+        >
+          <option value="">よく使う型から選択</option>
+          {dataTypePresetsForCategory(inferDefaultValueCategory(column, otherTables)).map((preset) => (
+            <option key={preset.value} value={preset.value}>
+              {preset.label}
+            </option>
+          ))}
+        </select>
         {/* 空欄のときに「自動判定だと今どの型になるか」が分からず不親切という指摘を受けて追加。
             手動で入力済みのときは入力した文字列をそのまま「現在の型」として表示する */}
         <span className="text-slate-400 dark:text-slate-500">

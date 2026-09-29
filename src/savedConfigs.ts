@@ -9,6 +9,8 @@ export interface AppState {
   quoteAll: boolean;
   // JSONを配列形式で出力するか。この項目を追加する前に保存された設定には無いため省略可(無ければfalse扱い)
   jsonArray?: boolean;
+  // CSVの日付列の先頭に'を付けるか。この項目を追加する前に保存された設定には無いため省略可(無ければfalse扱い)
+  escapeDatesForExcel?: boolean;
 }
 
 // 複数テーブル対応前の保存形式(テーブルは常に1個、tables配列ではなく

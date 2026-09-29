@@ -40,6 +40,19 @@ export function PreviewTable({ preview, error, previewSize, onPreviewSizeChange,
         </p>
       )}
 
+      {/* prepare_columns/prepare_tables(Rust側)がエラーにはしないが気づいた方がよい問題点
+          (都道府県/フリガナの列順、明らかに数値化できない列タイプへのデータの型指定など)。
+          CLIならターミナルにeprintln!で表示される内容だが、GUIには表示先が無いためここに出す。
+          "preview.warnings ?? []"は、再ビルド前の古いsrc-tauri/src-server(warningsフィールドが
+          まだ無いバージョン)からの応答が万一届いても、ここで例外にしないための保険 */}
+      {!error && preview && (preview.warnings ?? []).length > 0 && (
+        <ul className="space-y-1 rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          {(preview.warnings ?? []).map((warning, i) => (
+            <li key={i}>{warning}</li>
+          ))}
+        </ul>
+      )}
+
       {!error && preview && preview.headers.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">

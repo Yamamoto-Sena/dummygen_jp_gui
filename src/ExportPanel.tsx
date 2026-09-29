@@ -13,6 +13,8 @@ interface Props {
   onEncodingChange: (value: OutputEncoding) => void;
   quoteAll: boolean;
   onQuoteAllChange: (value: boolean) => void;
+  escapeDatesForExcel: boolean;
+  onEscapeDatesForExcelChange: (value: boolean) => void;
   jsonArray: boolean;
   onJsonArrayChange: (value: boolean) => void;
   onGenerate: () => void;
@@ -39,6 +41,8 @@ export function ExportPanel({
   onEncodingChange,
   quoteAll,
   onQuoteAllChange,
+  escapeDatesForExcel,
+  onEscapeDatesForExcelChange,
   jsonArray,
   onJsonArrayChange,
   onGenerate,
@@ -84,6 +88,21 @@ export function ExportPanel({
           </label>
           <p className="text-xs text-slate-400 dark:text-slate-500">
             氏名にスペースを含むケースなど、値の区切りを明確にしたい場合にオンにしてください。
+          </p>
+
+          <label className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-200 cursor-pointer mt-2">
+            <input
+              type="checkbox"
+              checked={escapeDatesForExcel}
+              onChange={(e) => onEscapeDatesForExcelChange(e.target.checked)}
+            />
+            日付をExcelに数値変換させず、文字列のまま保つ
+          </label>
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            このCSVをExcelでダブルクリックして開くと、日付の列が数値として誤認識され、行によって
+            "####"と表示されてしまうことがあります。オンにすると日付の値の先頭に見えない印(半角の')が付き、
+            Excelはそれを日付に変換しなくなります(表示上は付きません)。Excel以外のツールでこのCSVを
+            読み込む場合は、その印が値の一部として残る点に注意してください。
           </p>
         </div>
       )}

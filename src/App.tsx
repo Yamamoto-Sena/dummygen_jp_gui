@@ -80,6 +80,7 @@ function App() {
   const [format, setFormat] = useState<OutputFormat>("csv"); // 出力フォーマット(csv/sql/json/xlsx)
   const [encoding, setEncoding] = useState<OutputEncoding>("utf8"); // 文字コード(utf8/sjis)
   const [quoteAll, setQuoteAll] = useState(false); // CSVの値を""で囲むか
+  const [escapeDatesForExcel, setEscapeDatesForExcel] = useState(false); // CSVの日付列の先頭に'を付け、Excelでの誤変換(####表示)を防ぐか
   const [jsonArray, setJsonArray] = useState(false); // JSONを配列形式([{...},{...}])で出力するか
   const [successPath, setSuccessPath] = useState<string | null>(null); // 生成成功時に表示するファイル名
   const [previewSize, setPreviewSize] = useState(DEFAULT_PREVIEW_SAMPLE_SIZE); // プレビューの表示件数
@@ -88,6 +89,11 @@ function App() {
   const [validationError, setValidationError] = useState<string | null>(null); // 生成前チェックで引っかかったときのメッセージ
   const [savedConfigs, setSavedConfigs] = useState<SavedConfig[]>([]); // 保存済み設定の一覧
   const [toolsMenuOpen, setToolsMenuOpen] = useState(false); // 「メニュー」ボタンの開閉状態
+  // テンプレート/保存済み設定を読み込んだ直後にその名前を覚えておく表示用の状態。
+  // メニュー(ToolsMenu)は選択すると自動的に閉じる(setToolsMenuOpen(false))ため、
+  // ここで別に覚えておかないと「今どのテンプレート/設定を読み込んだ状態なのか」が
+  // メニューを閉じた瞬間に画面のどこにも残らなくなってしまう
+  const [loadedSourceLabel, setLoadedSourceLabel] = useState<string | null>(null);
 
   // useDummyGen()は「Tauri/ブラウザとのやり取り」をまとめて持つ自作フック(useDummyGen.ts参照)。
   // 分割代入({ ... } = ...)でその中の値・関数だけを取り出して使う。
@@ -126,6 +132,7 @@ function App() {
       setFormat(last.format);
       setEncoding(last.encoding);
       setQuoteAll(last.quoteAll ?? false);
+      setEscapeDatesForExcel(last.escapeDatesForExcel ?? false);
       setJsonArray(last.jsonArray ?? false);
     }
     setSavedConfigs(loadSavedConfigs());
@@ -140,10 +147,10 @@ function App() {
   // 「最後の変更から500ms操作が無かったとき」だけ実際に保存が行われる
   useEffect(() => {
     const timer = setTimeout(() => {
-      saveLastSession({ tables, format, encoding, quoteAll, jsonArray });
+      saveLastSession({ tables, format, encoding, quoteAll, escapeDatesForExcel, jsonArray });
     }, SESSION_SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [tables, format, encoding, quoteAll, jsonArray]);
+  }, [tables, format, encoding, quoteAll, escapeDatesForExcel, jsonArray]);
 
   // テーブル一覧が変わるたびに、少し待ってからサンプルデータを取り直す
   // (連続入力のたびに毎回呼ぶと重くなるため400ms待つ)。
@@ -320,6 +327,7 @@ function App() {
         encoding: outputEncoding,
         output_path: outputPath,
         quote_all: quoteAll,
+        escape_dates_for_excel: escapeDatesForExcel,
         json_array: jsonArray,
       });
     } else {
@@ -327,7 +335,7 @@ function App() {
       // map(...)で各テーブルの状態(TableConfig)を、Rust側が期待する形(SchemaInput、
       // row_count/table_name/columnsという名前)に1つずつ変換してリストにする
       const request: SchemaInput[] = tables.map((t) => ({ row_count: t.rowCount, table_name: t.name, columns: t.columns }));
-      ok = await generateMulti(request, format, outputEncoding, outputPath, quoteAll, jsonArray);
+      ok = await generateMulti(request, format, outputEncoding, outputPath, quoteAll, escapeDatesForExcel, jsonArray);
     }
     if (ok) {
       // ブラウザ版の複数テーブルは、実際にダウンロードされるファイル名がoutputPathと異なる
@@ -360,10 +368,11 @@ function App() {
     setActiveTableId(newTable.id);
     setSuccessPath(null);
     setToolsMenuOpen(false);
+    setLoadedSourceLabel(`テンプレート: ${template.label}`);
   };
 
   const handleSaveConfig = (name: string) => {
-    setSavedConfigs(upsertSavedConfig(name, { tables, format, encoding, quoteAll, jsonArray }));
+    setSavedConfigs(upsertSavedConfig(name, { tables, format, encoding, quoteAll, escapeDatesForExcel, jsonArray }));
   };
 
   const handleLoadConfig = (config: SavedConfig) => {
@@ -372,9 +381,11 @@ function App() {
     setFormat(config.state.format);
     setEncoding(config.state.encoding);
     setQuoteAll(config.state.quoteAll ?? false);
+    setEscapeDatesForExcel(config.state.escapeDatesForExcel ?? false);
     setJsonArray(config.state.jsonArray ?? false);
     setSuccessPath(null);
     setToolsMenuOpen(false);
+    setLoadedSourceLabel(`設定: ${config.name}`);
   };
 
   const handleDeleteConfig = (name: string) => {
@@ -478,7 +489,7 @@ function App() {
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">カラム(列)設定</h2>
             <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-              <span>このテーブルの生成件数(10〜1,000,000)</span>
+              <span>このテーブルの生成件数(10〜1,000,000、見出し行を含まないデータ行数)</span>
               <input
                 type="number"
                 min={MIN_ROW_COUNT}
@@ -521,6 +532,23 @@ function App() {
               onImportFile={handleImportSchemaFile}
             />
           </ToolsMenu>
+
+          {/* テンプレート・保存済み設定を読み込んだ直後、メニューを閉じても引き続き
+              「今何を読み込んだ状態か」が分かるように表示し続ける欄。読み込んでいなければ何も出さない */}
+          {loadedSourceLabel && (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-cyan-200 dark:border-cyan-900 bg-cyan-50 dark:bg-cyan-950/40 px-3 py-1.5 text-xs text-cyan-700 dark:text-cyan-300">
+              <span>読み込み中: {loadedSourceLabel}</span>
+              <button
+                type="button"
+                onClick={() => setLoadedSourceLabel(null)}
+                title="表示を消す"
+                className="shrink-0 text-cyan-500 hover:text-cyan-700 dark:hover:text-cyan-200 cursor-pointer"
+              >
+                ×
+              </button>
+            </div>
+          )}
+
           <ColumnEditor columns={activeTable.columns} onChange={setActiveColumns} otherTables={otherTables} />
         </section>
 
@@ -539,6 +567,8 @@ function App() {
             onEncodingChange={setEncoding}
             quoteAll={quoteAll}
             onQuoteAllChange={setQuoteAll}
+            escapeDatesForExcel={escapeDatesForExcel}
+            onEscapeDatesForExcelChange={setEscapeDatesForExcel}
             jsonArray={jsonArray}
             onJsonArrayChange={setJsonArray}
             onGenerate={handleGenerate}
@@ -551,8 +581,8 @@ function App() {
           {successPath && (
             <p className="rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
               {isTauriRuntime()
-                ? `${totalRows.toLocaleString()}行のデータを ${successPath} に書き出しました`
-                : `${totalRows.toLocaleString()}行のデータを ${successPath} としてダウンロードしました`}
+                ? `${totalRows.toLocaleString()}行のデータ(見出し行を含まない)を ${successPath} に書き出しました`
+                : `${totalRows.toLocaleString()}行のデータ(見出し行を含まない)を ${successPath} としてダウンロードしました`}
             </p>
           )}
         </section>

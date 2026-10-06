@@ -60,8 +60,11 @@ const HEADER_TYPE_RULES: { keywords?: string[]; suffixes?: string[]; type: strin
   { keywords: ["日付", "date"], type: "date" },
   // 「学習日」「登録日」「訪問日」のように、日本語では日付を表す列名の末尾が「日」に
   // なることが非常に多い(逆に「日」で終わって日付以外を表す列名はほぼ無い)。個別の
-  // キーワードを列挙しきるより、末尾一致で広く拾った方が漏れが少ない
-  { suffixes: ["日"], type: "date" },
+  // キーワードを列挙しきるより、末尾一致で広く拾った方が漏れが少ない。
+  // 英語ヘッダーでも"paid_at"/"created_at"/"updated_at"のように日時系の列名が
+  // "_at"で終わる慣習が一般的なため、同様に末尾一致で拾う("_at"は"date"という
+  // 文字列を含まないため、上のkeywords一致だけでは拾えない)
+  { suffixes: ["日", "_at"], type: "date" },
   { keywords: ["会員番号", "注文番号", "伝票番号", "番号", "no."], type: "sequence" },
 ];
 
@@ -93,6 +96,44 @@ const PLAIN_NUMBER_PATTERN = /^-?\d+(\.\d+)?$/;
 // user_idのような普通の整数列まで巻き添えで文字列化されてしまう。そこで「大部分(9割以上)が
 // 数字なら整数/小数の列とみなし、数字でない少数の値だけ無視する」という多数決の判定にする
 const NUMERIC_SHAPE_MIN_MATCH_RATIO = 0.9;
+
+// 日付形式の判定結果。startDate/endDateはColumnConfig.start/end用で、常に"YYYY-MM-DD"
+// 形式(dummy_data_gen側がこの形式でのみstart/endをパースするため。formatはCSV等への
+// 出力時の見た目だけを切り替える値で、start/endの保存形式には影響しない)
+type DateColumnShape = { format: "ymd" | "slash"; start: string; end: string };
+
+// "2024-03-04"や"2024/03/04"のような、ゼロ埋め4桁年+2桁月+2桁日の文字列かどうか
+// (実在する日付かどうか=うるう年や月末日の妥当性までは見ない。サンプルCSVの列タイプ
+// 推定という用途では、形式が日付らしいかどうかだけで十分なため)
+const YMD_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const SLASH_DATE_PATTERN = /^\d{4}\/\d{2}\/\d{2}$/;
+
+// detectNumericColumnShapeと同じ考え方の多数決判定(集計行等のノイズを無視する)
+const DATE_SHAPE_MIN_MATCH_RATIO = 0.9;
+
+// ヘッダー名からは判断できなかった列について、値の大部分が"YYYY-MM-DD"または
+// "YYYY/MM/DD"の形をしているかを見て、date列として復元する("paid_at"のように
+// 日付系の列名が"日付"/"date"/"_at"のどれにも一致しないケースを、値の形式から
+// 補って救うため)。ゼロ埋めされた年月日の文字列は辞書順ソート=時系列順と一致するため、
+// 文字列のまま並べ替えるだけでmin/max(開始日・終了日)を求められる
+function detectDateColumnShape(values: string[]): DateColumnShape | null {
+  if (values.length === 0) return null;
+
+  const ymdMatched = values.filter((v) => YMD_DATE_PATTERN.test(v));
+  if (ymdMatched.length / values.length >= DATE_SHAPE_MIN_MATCH_RATIO) {
+    const sorted = [...ymdMatched].sort();
+    return { format: "ymd", start: sorted[0], end: sorted[sorted.length - 1] };
+  }
+
+  const slashMatched = values.filter((v) => SLASH_DATE_PATTERN.test(v));
+  if (slashMatched.length / values.length >= DATE_SHAPE_MIN_MATCH_RATIO) {
+    const sorted = [...slashMatched].sort();
+    const toYmd = (v: string) => v.replace(/\//g, "-");
+    return { format: "slash", start: toYmd(sorted[0]), end: toYmd(sorted[sorted.length - 1]) };
+  }
+
+  return null;
+}
 
 // ヘッダー名だけでは列タイプを判断できなかった列について、実際の値の大部分が数字だけの
 // 形をしているかを見て、整数/小数の列として復元する(「金額」「数量」のようにヘッダーの
@@ -133,11 +174,15 @@ function detectNumericColumnShape(values: string[]): NumericColumnShape | null {
 // 値そのものは選択肢や固定範囲に一切残さない。列タイプは次の優先順で決める。
 //   1. ヘッダーの文字列だけで判断できるもの(詳しくはHEADER_TYPE_RULES/
 //      detectColumnTypeFromHeaderのコメントを参照。実際の値は一切見ない)
-//   2. ヘッダーからは判断できないが、値の大部分(9割以上)が数字の形をしているもの
-//      (detectNumericColumnShape。「金額」「数量」「user_id」のような列が、合計行や
-//      空欄代わりの記号がごく一部混ざっただけでマスキングにより文字列化され、元が数値だった
-//      という情報が失われてしまうのを防ぐ。使うのは最小値・最大値・小数桁数という集計結果だけ)
-//   3. どちらでもない列は、フォールバックとして「値の種類数」だけを数え、"A_1"/"A_2"/...
+//   2. ヘッダーからは判断できないが、値の大部分(9割以上)が"YYYY-MM-DD"/"YYYY/MM/DD"の
+//      形をしているもの(detectDateColumnShape。"paid_at"のように列名からは日付と
+//      判断できない列を値の形式から補う。使うのは開始日・終了日という集計結果だけ)
+//   3. ヘッダーからも日付形式からも判断できないが、値の大部分(9割以上)が数字の形を
+//      しているもの(detectNumericColumnShape。「金額」「数量」「user_id」のような列が、
+//      合計行や空欄代わりの記号がごく一部混ざっただけでマスキングにより文字列化され、
+//      元が数値だったという情報が失われてしまうのを防ぐ。使うのは最小値・最大値・
+//      小数桁数という集計結果だけ)
+//   4. どれでもない列は、フォールバックとして「値の種類数」だけを数え、"A_1"/"A_2"/...
 //      という仮の値に置き換えたenum(カスタム選択肢)にする(実データが3種類あれば
 //      ["A_1","A_2","A_3"]になる)
 export function SampleCsvImport({ columns, onImport }: Props) {
@@ -179,6 +224,17 @@ export function SampleCsvImport({ columns, onImport }: Props) {
       for (const row of scanned) {
         const value = (row[colIndex] ?? "").trim();
         if (value !== "") values.push(value);
+      }
+
+      // ヘッダーからは判断できなかったが、値の大部分が"YYYY-MM-DD"/"YYYY/MM/DD"の形を
+      // していればdate列として復元する(paid_atのように列名からは日付と判断できない
+      // ケースを値の形式から補う。数値判定より先に試すのは、スラッシュ・ハイフンを含む
+      // 日付文字列は後述のPLAIN_NUMBER_PATTERNには元々一致しないため実害は無いが、
+      // 将来compact("20240304")のような区切り無し形式を対応させる際に数値列へ
+      // 誤って吸われないようにするため)
+      const dateShape = detectDateColumnShape(values);
+      if (dateShape) {
+        return { ...newColumn(name, "date"), start: dateShape.start, end: dateShape.end, format: dateShape.format };
       }
 
       // ヘッダーからは判断できなかったが、値が全て数字の形をしていれば整数/小数の列として
@@ -242,7 +298,7 @@ export function SampleCsvImport({ columns, onImport }: Props) {
         />
       </div>
       <p className="text-[11px] text-slate-400 dark:text-slate-500">
-列名(氏名・メールアドレス・住所など)から列タイプを自動判定します。判定できなかった列のうち、値の9割以上が数字の列は範囲(最小値・最大値)を保った整数/小数として(合計行等ごく一部の非数値は無視します)、それ以外は「値の種類数」だけを読み取ってA_1/A_2/...という仮の値に置き換えます。いずれもセルの値そのものは一切使いません
+列名(氏名・メールアドレス・住所など)から列タイプを自動判定します。判定できなかった列のうち、値の9割以上が"YYYY-MM-DD"等の日付形式の列は開始日・終了日を保った日付として、9割以上が数字の列は範囲(最小値・最大値)を保った整数/小数として(いずれも合計行等ごく一部の例外は無視します)、それ以外は「値の種類数」だけを読み取ってA_1/A_2/...という仮の値に置き換えます。いずれもセルの値そのものは一切使いません
       </p>
     </div>
   );

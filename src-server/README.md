@@ -106,6 +106,7 @@ curl http://localhost:3000/api/health
 | `quote_all` | boolean | ○ | CSVの全ての値を`""`で囲むか(CSV以外では無視される) |
 | `escape_dates_for_excel` | boolean | - | `true`でCSVのdate/birth_date列の値の先頭に半角の`'`を付ける。ExcelでこのCSVをダブルクリックして開いたときに日付として誤認識され、列幅の関係で一部の行だけ`"####"`と表示されてしまう問題を避けるためのオプション(CSV以外では無視される)。省略時は`false` |
 | `json_array` | boolean | - | `true`でJSONをファイル全体で1つの配列(`[{...},{...}]`)にする。省略時・`false`は1行1件のNDJSON(JSON以外では無視される) |
+| `sql_dialect` | `"standard"` \| `"mysql"` \| `"postgresql"` \| `"sqlserver"` \| `"sqlite"` | - | SQL出力の識別子(テーブル名・カラム名)のクォート方式。`standard`/`postgresql`/`sqlite`はダブルクォート、`mysql`はバッククォート、`sqlserver`は角カッコ(SQL以外では無視される)。省略時は`standard` |
 | `file_name` | string | - | ダウンロード時のファイル名の候補。省略時は`output.csv`等 |
 
 ```bash
@@ -130,6 +131,7 @@ curl -X POST http://localhost:3000/api/generate \
 | `quote_all` | boolean | ○ | CSVの全ての値を`""`で囲むか(CSV以外では無視される) |
 | `escape_dates_for_excel` | boolean | - | `true`でCSVのdate/birth_date列の値の先頭に半角の`'`を付ける。ExcelでこのCSVをダブルクリックして開いたときに日付として誤認識され、列幅の関係で一部の行だけ`"####"`と表示されてしまう問題を避けるためのオプション(CSV以外では無視される)。省略時は`false` |
 | `json_array` | boolean | - | `true`でJSONをファイル全体で1つの配列(`[{...},{...}]`)にする。省略時・`false`は1行1件のNDJSON(JSON以外では無視される) |
+| `sql_dialect` | `"standard"` \| `"mysql"` \| `"postgresql"` \| `"sqlserver"` \| `"sqlite"` | - | SQL出力の識別子クォート方式(`/api/generate`と同じ意味。SQL以外では無視される)。省略時は`standard` |
 
 レスポンス(`200 OK`): ファイルが1個だけ(SQL、またはExcel、またはCSV/JSONでテーブルが1個)ならそのファイル、CSV/JSONで複数テーブル(ファイルが2個以上)ならそれらをまとめた`output.zip`(`Content-Type: application/zip`)。
 

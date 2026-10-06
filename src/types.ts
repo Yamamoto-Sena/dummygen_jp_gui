@@ -350,6 +350,19 @@ export type OutputEncoding = "utf8" | "sjis";
 // jsonはJSONの仕様上UTF-8が前提のため、画面で選ばれた文字コードに関わらず常にutf8で書き出す(App.tsx参照)
 export type OutputFormat = "csv" | "sql" | "json" | "xlsx";
 
+// SQL出力(format: "sql")で、テーブル名・カラム名を囲む識別子クォートの方式(Rust側のSqlDialectと対応)。
+// standard/postgresql/sqliteはダブルクォート("name")、mysqlはバッククォート(`name`)、
+// sqlserverは角カッコ([name])になる(dummy_data_gen側のsql_identを参照)
+export type OutputSqlDialect = "standard" | "mysql" | "postgresql" | "sqlserver" | "sqlite";
+
+export const SQL_DIALECTS: { value: OutputSqlDialect; label: string }[] = [
+  { value: "standard", label: "標準SQL" },
+  { value: "mysql", label: "MySQL" },
+  { value: "postgresql", label: "PostgreSQL" },
+  { value: "sqlserver", label: "SQL Server" },
+  { value: "sqlite", label: "SQLite" },
+];
+
 export interface PreviewResult {
   headers: string[];
   rows: (string | null)[][];
@@ -374,6 +387,8 @@ export interface GenerateRequest {
   escape_dates_for_excel: boolean;
   // trueのとき、JSON出力をファイル全体で1つの配列([{...},{...}])にする。falseならNDJSON(1行1件)。JSON以外には影響しない
   json_array: boolean;
+  // SQL出力の識別子クォート方式。省略時はstandard(既存のダブルクォート出力)として扱う。SQL以外には影響しない
+  sql_dialect?: OutputSqlDialect;
 }
 
 export interface GenerationProgress {

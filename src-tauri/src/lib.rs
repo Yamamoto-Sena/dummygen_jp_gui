@@ -10,7 +10,7 @@ use dummy_data_gen::{
     prepare_warnings, reject_foreign_key_in_single_table, resolve_fk_reprs, resolve_foreign_keys,
     resolve_unique_pools, schema_file_to_yaml, topological_order, write_csv_streaming, write_output_multi_table,
     write_sql_streaming, write_text, write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema,
-    SchemaFile, DEFAULT_CHUNK_SIZE,
+    SchemaFile, SqlDialect, DEFAULT_CHUNK_SIZE,
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -36,6 +36,19 @@ fn catch_panic_as_err<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, Str
             .unwrap_or_else(|| "不明な内部エラー".to_string());
         Err(format!("内部エラーが発生しました(想定外の不具合の可能性があります): {detail}"))
     })
+}
+
+// フロントエンドから来た文字列("standard"等、省略時はNone)を、dummy_data_gen側の
+// SqlDialectに変換する。省略時は既定のStandard(既存のダブルクォート出力)として扱う
+fn parse_sql_dialect(value: Option<&str>) -> Result<SqlDialect, String> {
+    match value.unwrap_or("standard") {
+        "standard" => Ok(SqlDialect::Standard),
+        "mysql" => Ok(SqlDialect::Mysql),
+        "postgresql" => Ok(SqlDialect::PostgreSql),
+        "sqlserver" => Ok(SqlDialect::SqlServer),
+        "sqlite" => Ok(SqlDialect::Sqlite),
+        other => Err(format!("未対応のSQL方言です: {other}")),
+    }
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -65,6 +78,10 @@ struct GenerateRequest {
     escape_dates_for_excel: bool,
     // trueのとき、JSON出力をファイル全体で1つの配列にする(falseならNDJSON)。JSON以外には影響しない
     json_array: bool,
+    // SQL出力の識別子クォート方式("standard"/"mysql"/"postgresql"/"sqlserver"/"sqlite")。
+    // 省略時(None)はstandard(既存のダブルクォート出力)として扱う。SQL以外には影響しない
+    #[serde(default)]
+    sql_dialect: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -103,6 +120,9 @@ struct GenerateRequestMulti {
     escape_dates_for_excel: bool,
     // trueのとき、JSON出力をテーブルごとに1つの配列にする(単一テーブルのGenerateRequestと同じ意味)
     json_array: bool,
+    // SQL出力の識別子クォート方式(単一テーブルのGenerateRequestと同じ意味)
+    #[serde(default)]
+    sql_dialect: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -330,11 +350,13 @@ fn generate_dummy_data(app: tauri::AppHandle, request: GenerateRequest) -> Resul
             "sql" => {
                 let table_name =
                     schema.table_name.ok_or_else(|| "SQL出力にはテーブル名の指定が必要です".to_string())?;
+                let sql_dialect = parse_sql_dialect(request.sql_dialect.as_deref())?;
                 write_sql_streaming(
                     schema.row_count,
                     &columns,
                     base_seed,
                     &table_name,
+                    sql_dialect,
                     &request.output_path,
                     encoding,
                     DEFAULT_CHUNK_SIZE,
@@ -389,6 +411,7 @@ fn run_generate_multi(
     quote_all: bool,
     escape_dates_for_excel: bool,
     json_array: bool,
+    sql_dialect: Option<&str>,
     mut on_table_start: impl FnMut(usize, &dummy_data_gen::PreparedTable),
 ) -> Result<(), String> {
     // 万一dummy_data_gen側の内部矛盾でpanicしても、catch_panic_as_errがアプリ全体の
@@ -448,8 +471,18 @@ fn run_generate_multi(
             other => return Err(format!("複数テーブルでは未対応の出力形式です: {other}")),
         };
 
-        write_output_multi_table(format, &generated, output_path, encoding, quote_all, escape_dates_for_excel, json_array)
-            .map_err(|e| e.to_string())?;
+        let sql_dialect = parse_sql_dialect(sql_dialect)?;
+        write_output_multi_table(
+            format,
+            &generated,
+            output_path,
+            sql_dialect,
+            encoding,
+            quote_all,
+            escape_dates_for_excel,
+            json_array,
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     })
 }
@@ -474,6 +507,7 @@ fn generate_dummy_data_multi(app: tauri::AppHandle, request: GenerateRequestMult
         request.quote_all,
         request.escape_dates_for_excel,
         request.json_array,
+        request.sql_dialect.as_deref(),
         move |_idx, _table| {
             let _ =
                 app_for_progress.emit("generation:progress", GenerationProgress { done: done_count, total: total_tables });
@@ -592,6 +626,7 @@ mod tests {
             false,
             false,
             false,
+            None,
             |_, _| {},
         )
         .err()
@@ -640,6 +675,7 @@ mod tests {
             false,
             false,
             false,
+            None,
             |_idx, table| started_tables.push(table.name.clone().unwrap_or_default()),
         )
         .expect("複数テーブルの生成に失敗した");
@@ -680,6 +716,7 @@ mod tests {
             false,
             false,
             false,
+            None,
             |_, _| {},
         )
         .expect("xlsx形式での複数テーブル生成に失敗した");
@@ -707,6 +744,7 @@ mod tests {
             false,
             false,
             false,
+            None,
             |_, _| {},
         )
         .expect("json形式での複数テーブル生成に失敗した");
@@ -739,6 +777,7 @@ mod tests {
             false,
             false,
             true,
+            None,
             |_, _| {},
         )
         .expect("json(配列形式)での複数テーブル生成に失敗した");
@@ -769,6 +808,7 @@ mod tests {
             true,
             false,
             false,
+            None,
             |_, _| {},
         )
         .expect("複数テーブルの生成に失敗した");
@@ -807,12 +847,67 @@ mod tests {
             false,
             true,
             false,
+            None,
             |_, _| {},
         )
         .expect("複数テーブルの生成に失敗した");
 
         let orders_csv = std::fs::read_to_string(dir.join("multi_test_out_orders.csv")).unwrap();
         assert_eq!(orders_csv, "id,paid_at\n1,'2024-01-05\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // sql_dialect: Some("mysql")がrun_generate_multi経由でdummy_data_gen側のSqlDialectまで
+    // 正しく伝わり、生成されたSQLの識別子がバッククォートになることを確認する
+    #[test]
+    fn run_generate_multi_sql_with_mysql_dialect_uses_backtick_identifiers() {
+        let dir = std::env::temp_dir().join(format!("dummygen_jp_gui_sql_dialect_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base_path = dir.join("multi_test_out.sql");
+
+        run_generate_multi(
+            vec![users_schema()],
+            "sql",
+            "utf8",
+            Some(42),
+            base_path.to_str().unwrap(),
+            false,
+            false,
+            false,
+            Some("mysql"),
+            |_, _| {},
+        )
+        .expect("mysql方言での複数テーブルSQL生成に失敗した");
+
+        let sql = std::fs::read_to_string(&base_path).unwrap();
+        assert!(sql.contains("INSERT INTO `users`"), "SQL: {}", sql);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 未対応の方言文字列が来たら、黙ってstandardにフォールバックせず明示的にエラーにすることを確認する
+    #[test]
+    fn run_generate_multi_rejects_unknown_sql_dialect() {
+        let dir = std::env::temp_dir().join(format!("dummygen_jp_gui_sql_dialect_err_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base_path = dir.join("multi_test_out.sql");
+
+        let err = run_generate_multi(
+            vec![users_schema()],
+            "sql",
+            "utf8",
+            Some(42),
+            base_path.to_str().unwrap(),
+            false,
+            false,
+            false,
+            Some("oracle"),
+            |_, _| {},
+        )
+        .err()
+        .expect("未対応の方言なのにエラーにならなかった");
+        assert!(err.contains("oracle"), "エラーメッセージ: {}", err);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

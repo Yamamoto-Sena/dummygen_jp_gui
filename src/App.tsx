@@ -34,6 +34,7 @@ import {
   newColumn,
   type OutputEncoding,
   type OutputFormat,
+  type OutputSqlDialect,
   type PreviewResult,
   type SchemaFileResult,
   type SchemaInput,
@@ -82,6 +83,7 @@ function App() {
   const [quoteAll, setQuoteAll] = useState(false); // CSVの値を""で囲むか
   const [escapeDatesForExcel, setEscapeDatesForExcel] = useState(false); // CSVの日付列の先頭に'を付け、Excelでの誤変換(####表示)を防ぐか
   const [jsonArray, setJsonArray] = useState(false); // JSONを配列形式([{...},{...}])で出力するか
+  const [sqlDialect, setSqlDialect] = useState<OutputSqlDialect>("standard"); // SQL出力の識別子クォート方式(標準SQL/MySQL/PostgreSQL/SQL Server/SQLite)
   const [successPath, setSuccessPath] = useState<string | null>(null); // 生成成功時に表示するファイル名
   const [previewSize, setPreviewSize] = useState(DEFAULT_PREVIEW_SAMPLE_SIZE); // プレビューの表示件数
   const [previewByTable, setPreviewByTable] = useState<Record<string, PreviewResult>>({}); // テーブルidごとのプレビュー結果
@@ -134,6 +136,7 @@ function App() {
       setQuoteAll(last.quoteAll ?? false);
       setEscapeDatesForExcel(last.escapeDatesForExcel ?? false);
       setJsonArray(last.jsonArray ?? false);
+      setSqlDialect(last.sqlDialect ?? "standard");
     }
     setSavedConfigs(loadSavedConfigs());
   }, []);
@@ -147,10 +150,10 @@ function App() {
   // 「最後の変更から500ms操作が無かったとき」だけ実際に保存が行われる
   useEffect(() => {
     const timer = setTimeout(() => {
-      saveLastSession({ tables, format, encoding, quoteAll, escapeDatesForExcel, jsonArray });
+      saveLastSession({ tables, format, encoding, quoteAll, escapeDatesForExcel, jsonArray, sqlDialect });
     }, SESSION_SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [tables, format, encoding, quoteAll, escapeDatesForExcel, jsonArray]);
+  }, [tables, format, encoding, quoteAll, escapeDatesForExcel, jsonArray, sqlDialect]);
 
   // テーブル一覧が変わるたびに、少し待ってからサンプルデータを取り直す
   // (連続入力のたびに毎回呼ぶと重くなるため400ms待つ)。
@@ -329,13 +332,16 @@ function App() {
         quote_all: quoteAll,
         escape_dates_for_excel: escapeDatesForExcel,
         json_array: jsonArray,
+        sql_dialect: sqlDialect,
       });
     } else {
       // テーブルが2個以上のときは、複数テーブル用のgenerateMulti関数を呼ぶ。
       // map(...)で各テーブルの状態(TableConfig)を、Rust側が期待する形(SchemaInput、
       // row_count/table_name/columnsという名前)に1つずつ変換してリストにする
       const request: SchemaInput[] = tables.map((t) => ({ row_count: t.rowCount, table_name: t.name, columns: t.columns }));
-      ok = await generateMulti(request, format, outputEncoding, outputPath, quoteAll, escapeDatesForExcel, jsonArray);
+      ok = await generateMulti(
+        request, format, outputEncoding, outputPath, quoteAll, escapeDatesForExcel, jsonArray, sqlDialect,
+      );
     }
     if (ok) {
       // ブラウザ版の複数テーブルは、実際にダウンロードされるファイル名がoutputPathと異なる
@@ -372,7 +378,9 @@ function App() {
   };
 
   const handleSaveConfig = (name: string) => {
-    setSavedConfigs(upsertSavedConfig(name, { tables, format, encoding, quoteAll, escapeDatesForExcel, jsonArray }));
+    setSavedConfigs(
+      upsertSavedConfig(name, { tables, format, encoding, quoteAll, escapeDatesForExcel, jsonArray, sqlDialect }),
+    );
   };
 
   const handleLoadConfig = (config: SavedConfig) => {
@@ -383,6 +391,7 @@ function App() {
     setQuoteAll(config.state.quoteAll ?? false);
     setEscapeDatesForExcel(config.state.escapeDatesForExcel ?? false);
     setJsonArray(config.state.jsonArray ?? false);
+    setSqlDialect(config.state.sqlDialect ?? "standard");
     setSuccessPath(null);
     setToolsMenuOpen(false);
     setLoadedSourceLabel(`設定: ${config.name}`);
@@ -571,6 +580,8 @@ function App() {
             onEscapeDatesForExcelChange={setEscapeDatesForExcel}
             jsonArray={jsonArray}
             onJsonArrayChange={setJsonArray}
+            sqlDialect={sqlDialect}
+            onSqlDialectChange={setSqlDialect}
             onGenerate={handleGenerate}
             isGenerating={isGenerating}
             progress={progress}

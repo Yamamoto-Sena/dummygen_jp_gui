@@ -18,7 +18,7 @@ use dummy_data_gen::{
     prepare_warnings, reject_foreign_key_in_single_table, resolve_fk_reprs, resolve_foreign_keys,
     resolve_unique_pools, schema_file_to_yaml, topological_order, write_csv_streaming, write_output_multi_table,
     write_sql_streaming, write_text, write_xlsx_from_rows, ColumnDef, Encoding, Format, GeneratedTable, Schema,
-    SchemaFile, DEFAULT_CHUNK_SIZE,
+    SchemaFile, SqlDialect, DEFAULT_CHUNK_SIZE,
 };
 use serde::{Deserialize, Serialize};
 use tower_http::services::ServeDir;
@@ -26,6 +26,20 @@ use tower_http::services::ServeDir;
 // プレビューは実際の生成件数を使うと重くなるため、常にこの件数だけ試しに生成する
 // (src-tauri/src/lib.rsのPREVIEW_SAMPLE_SIZEと同じ値に合わせている)
 const PREVIEW_SAMPLE_SIZE: u32 = 5;
+
+// フロントエンドから来た文字列("standard"等、省略時はNone)を、dummy_data_gen側の
+// SqlDialectに変換する。省略時は既定のStandard(既存のダブルクォート出力)として扱う
+// (src-tauri/src/lib.rsのparse_sql_dialectと同じ内容)
+fn parse_sql_dialect(value: Option<&str>) -> Result<SqlDialect, ApiError> {
+    match value.unwrap_or("standard") {
+        "standard" => Ok(SqlDialect::Standard),
+        "mysql" => Ok(SqlDialect::Mysql),
+        "postgresql" => Ok(SqlDialect::PostgreSql),
+        "sqlserver" => Ok(SqlDialect::SqlServer),
+        "sqlite" => Ok(SqlDialect::Sqlite),
+        other => Err(bad_request(format!("未対応のSQL方言です: {other}"))),
+    }
+}
 
 // リクエストのボディが大きすぎて弾かれないよう、生成・プレビューのAPIだけボディ上限を
 // 引き上げる(axumの既定は2MB。列数の多いスキーマや複数テーブルのJSONで超える場合がある)
@@ -73,6 +87,10 @@ struct GenerateRequestWeb {
     // この項目を追加する前からAPIを使っている呼び出し側を壊さないよう、省略可(省略時false)にしている
     #[serde(default)]
     json_array: bool,
+    // SQL出力の識別子クォート方式(dummygen_jp_gui/src-tauri/src/lib.rsのGenerateRequestと同じ意味。
+    // 省略時はstandard。SQL以外には影響しない)
+    #[serde(default)]
+    sql_dialect: Option<String>,
     file_name: Option<String>,
 }
 
@@ -91,6 +109,9 @@ struct GenerateRequestMultiWeb {
     // GenerateRequestWeb.json_arrayと同じ意味(省略時false)
     #[serde(default)]
     json_array: bool,
+    // GenerateRequestWeb.sql_dialectと同じ意味(省略時standard)
+    #[serde(default)]
+    sql_dialect: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -269,11 +290,13 @@ fn run_generate(request: GenerateRequestWeb, output_path: &str) -> Result<(), Ap
         ),
         "sql" => {
             let table_name = schema.table_name.ok_or_else(|| bad_request("SQL出力にはテーブル名の指定が必要です"))?;
+            let sql_dialect = parse_sql_dialect(request.sql_dialect.as_deref())?;
             write_sql_streaming(
                 schema.row_count,
                 &columns,
                 base_seed,
                 &table_name,
+                sql_dialect,
                 output_path,
                 encoding,
                 DEFAULT_CHUNK_SIZE,
@@ -375,10 +398,12 @@ fn run_generate_multi(request: GenerateRequestMultiWeb, output_base_path: &str) 
         other => return Err(bad_request(format!("複数テーブルでは未対応の出力形式です: {other}"))),
     };
 
+    let sql_dialect = parse_sql_dialect(request.sql_dialect.as_deref())?;
     write_output_multi_table(
         format,
         &generated,
         output_base_path,
+        sql_dialect,
         encoding,
         request.quote_all,
         request.escape_dates_for_excel,
@@ -555,6 +580,7 @@ mod tests {
             quote_all: false,
             escape_dates_for_excel: false,
             json_array: false,
+            sql_dialect: None,
             file_name: None,
         };
         let path = temp_path("generate_test.csv");
@@ -575,6 +601,7 @@ mod tests {
             quote_all: false,
             escape_dates_for_excel: false,
             json_array: false,
+            sql_dialect: None,
             file_name: None,
         };
         let path = temp_path("generate_test.xlsx");
@@ -595,11 +622,35 @@ mod tests {
             quote_all: false,
             escape_dates_for_excel: false,
             json_array: false,
+            sql_dialect: None,
             file_name: None,
         };
         let path = temp_path("generate_test_no_table_name.sql");
         let err = run_generate(request, path.to_str().unwrap()).expect_err("table_name無しのSQLはエラーになるはず");
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
+    }
+
+    // sql_dialect: Some("mysql")がrun_generate経由でdummy_data_gen側のSqlDialectまで
+    // 正しく伝わり、生成されたSQLの識別子がバッククォートになることを確認する
+    #[test]
+    fn run_generate_sql_with_mysql_dialect_uses_backtick_identifiers() {
+        let request = GenerateRequestWeb {
+            row_count: 3,
+            columns: sequence_and_name_columns(),
+            table_name: Some("users".to_string()),
+            format: "sql".to_string(),
+            encoding: "utf8".to_string(),
+            seed: Some(1),
+            quote_all: false,
+            escape_dates_for_excel: false,
+            json_array: false,
+            sql_dialect: Some("mysql".to_string()),
+            file_name: None,
+        };
+        let path = temp_path("generate_test_mysql_dialect.sql");
+        run_generate(request, path.to_str().unwrap()).expect("mysql方言でのSQL生成に失敗した");
+        let sql = std::fs::read_to_string(&path).unwrap();
+        assert!(sql.starts_with("INSERT INTO `users`"), "SQL先頭: {}", sql);
     }
 
     #[test]
@@ -612,6 +663,7 @@ mod tests {
             quote_all: false,
             escape_dates_for_excel: false,
             json_array: false,
+            sql_dialect: None,
         };
         let base_path = temp_path("generate_multi_test.csv");
         let written =
@@ -642,6 +694,7 @@ mod tests {
             quote_all: true,
             escape_dates_for_excel: false,
             json_array: false,
+            sql_dialect: None,
         };
         let base_path = temp_path("generate_multi_quote_all_test.csv");
         let written =

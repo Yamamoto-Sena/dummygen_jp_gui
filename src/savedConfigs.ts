@@ -1,4 +1,11 @@
-import { makeTableId, type ColumnConfig, type OutputEncoding, type OutputFormat, type TableConfig } from "./types";
+import {
+  makeTableId,
+  type ColumnConfig,
+  type OutputEncoding,
+  type OutputFormat,
+  type OutputSqlDialect,
+  type TableConfig,
+} from "./types";
 
 // 画面の設定一式(テーブル一覧＋エクスポート設定)をまとめた型。
 // 保存・復元の対象はこれだけ(進捗やプレビュー結果のような一時的な状態は含めない)
@@ -11,6 +18,8 @@ export interface AppState {
   jsonArray?: boolean;
   // CSVの日付列の先頭に'を付けるか。この項目を追加する前に保存された設定には無いため省略可(無ければfalse扱い)
   escapeDatesForExcel?: boolean;
+  // SQL出力の識別子クォート方式。この項目を追加する前に保存された設定には無いため省略可(無ければstandard扱い)
+  sqlDialect?: OutputSqlDialect;
 }
 
 // 複数テーブル対応前の保存形式(テーブルは常に1個、tables配列ではなく

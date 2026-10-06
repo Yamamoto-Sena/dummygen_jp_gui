@@ -4,7 +4,7 @@
 // 選んだ設定をonGenerate()経由で親(App.tsx)に伝えるだけ
 import { Loader2, Save, TriangleAlert } from "lucide-react";
 import { ProgressBar } from "./ProgressBar";
-import type { GenerationProgress, OutputEncoding, OutputFormat } from "./types";
+import { SQL_DIALECTS, type GenerationProgress, type OutputEncoding, type OutputFormat, type OutputSqlDialect } from "./types";
 
 interface Props {
   format: OutputFormat;
@@ -17,6 +17,8 @@ interface Props {
   onEscapeDatesForExcelChange: (value: boolean) => void;
   jsonArray: boolean;
   onJsonArrayChange: (value: boolean) => void;
+  sqlDialect: OutputSqlDialect;
+  onSqlDialectChange: (value: OutputSqlDialect) => void;
   onGenerate: () => void;
   isGenerating: boolean;
   progress: GenerationProgress | null;
@@ -45,6 +47,8 @@ export function ExportPanel({
   onEscapeDatesForExcelChange,
   jsonArray,
   onJsonArrayChange,
+  sqlDialect,
+  onSqlDialectChange,
   onGenerate,
   isGenerating,
   progress,
@@ -103,6 +107,28 @@ export function ExportPanel({
             "####"と表示されてしまうことがあります。オンにすると日付の値の先頭に見えない印(半角の')が付き、
             Excelはそれを日付に変換しなくなります(表示上は付きません)。Excel以外のツールでこのCSVを
             読み込む場合は、その印が値の一部として残る点に注意してください。
+          </p>
+        </div>
+      )}
+
+      {/* SQLのときだけ、INSERT文の識別子(テーブル名・カラム名)をどのDB向けのクォート記号で
+          囲むかを選ばせる(標準SQL/MySQL/PostgreSQL/SQL Server/SQLite)。csv/json/xlsxには無関係 */}
+      {format === "sql" && (
+        <div className="flex flex-col gap-1">
+          <span className={labelClass}>SQL方言(識別子のクォート方式)</span>
+          <select
+            value={sqlDialect}
+            onChange={(e) => onSqlDialectChange(e.target.value as OutputSqlDialect)}
+            className="rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-700 dark:text-slate-200 px-2 py-1.5"
+          >
+            {SQL_DIALECTS.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            MySQLはダブルクォートを識別子として受け付けないため、MySQLに流し込む場合は「MySQL」を選んでください。
           </p>
         </div>
       )}

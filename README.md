@@ -103,6 +103,7 @@ cargo run --release   # サーバーを起動する(既定でポート3000)
 - 出力する文字コードがUTF-8のときは、Excel(日本語版)がBOM無しUTF-8のCSVをShift-JISと誤認して文字化けするのを防ぐため、ファイル先頭にUTF-8のBOMを付けている(単一テーブルのCSV出力のみ。複数テーブルのCSV/JSON出力は`dummy_data_gen`側の`write_output_multi_table`をそのまま使うためBOMは付かない)
 - CSV出力は`quote_all`が`true`のとき全ての値をダブルクォートで囲む(`dummy_data_gen::write_csv_streaming`/`build_csv_from_rows`の`quote_all`引数にそのまま渡すだけ)。単一テーブル(`GenerateRequest.quote_all`)・複数テーブル(`GenerateRequestMulti.quote_all`)のどちらも対応している
 - CSV出力は`escape_dates_for_excel`が`true`のとき、date/birth_date列の値の先頭に半角の`'`を付ける(`quote_all`と同じく`write_csv_streaming`/`build_csv_from_rows`にそのまま渡すだけ。単一テーブル・複数テーブルどちらも対応)。ExcelでこのCSVをダブルクリックして開いたときに日付として誤認識され、列幅の関係で一部の行だけ`"####"`と表示されてしまう問題を避けるためのオプションで、既定はfalse(付けない)
+- SQL出力は`sql_dialect`(`Option<String>`、省略時standard)で識別子(テーブル名・カラム名)のクォート方式を切り替えられる("standard"/"mysql"/"postgresql"/"sqlserver"/"sqlite")。`parse_sql_dialect`ヘルパーが文字列を`dummy_data_gen::SqlDialect`に変換し、`write_sql_streaming`/`write_output_multi_table`へそのまま渡す。MySQLはデフォルト設定ではダブルクォートを識別子として受け付けないため、MySQLへ流し込む場合は`"mysql"`を指定する(フロントエンドの`ExportPanel.tsx`がSQL形式選択時のみ方言ドロップダウンを表示する)
 
 ## Rust側(src-server、ブラウザ版)
 

@@ -8,6 +8,7 @@ import type {
   GenerationProgress,
   OutputEncoding,
   OutputFormat,
+  OutputSqlDialect,
   PreviewResult,
   SchemaFileResult,
   SchemaInput,
@@ -142,6 +143,7 @@ export function useDummyGen() {
       quoteAll: boolean,
       escapeDatesForExcel: boolean,
       jsonArray: boolean,
+      sqlDialect: OutputSqlDialect,
     ) => {
       setError(null);
       setIsGenerating(true);
@@ -157,6 +159,7 @@ export function useDummyGen() {
               quote_all: quoteAll,
               escape_dates_for_excel: escapeDatesForExcel,
               json_array: jsonArray,
+              sql_dialect: sqlDialect,
             },
           });
         } else {
@@ -167,6 +170,7 @@ export function useDummyGen() {
             quote_all: quoteAll,
             escape_dates_for_excel: escapeDatesForExcel,
             json_array: jsonArray,
+            sql_dialect: sqlDialect,
           });
           const blob = await res.blob();
           const fallbackName = format === "sql" ? "output.sql" : format === "xlsx" ? "output.xlsx" : "output.zip";
